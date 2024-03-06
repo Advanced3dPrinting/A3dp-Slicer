@@ -1891,7 +1891,7 @@ GLGizmoCut3D::PartSelection::PartSelection(const ModelObject* mo, const Transfor
 
     // split to parts
     for (int id = int(volumes.size())-1; id >= 0; id--)
-        if (volumes[id]->is_splittable())
+        if (volumes[id]->is_splittable() && volumes[id]->is_model_part()) // we have to split just solid volumes
             volumes[id]->split(1);
 
     m_parts.clear();
