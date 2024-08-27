@@ -320,13 +320,18 @@ float new_feedrate_to_reach_time_stretch(
                 }
             }
         }
+
+        // Handle cases when all lines have feedrate below or equal to min_feedrate
+        // or when the accumulated sum of time is a very small number.
         assert(denom > 0);
-        if (denom <= 0)
+        if (nomin <= 0 || denom <= EPSILON)
             return min_feedrate;
+
         new_feedrate = nomin / denom;
         assert(new_feedrate > min_feedrate - EPSILON);
         if (new_feedrate < min_feedrate + EPSILON)
             goto finished;
+
         for (auto it = it_begin; it != it_end; ++ it)
 			for (size_t i = 0; i < (*it)->n_lines_adjustable; ++i) {
 				const CoolingLine &line = (*it)->lines[i];
