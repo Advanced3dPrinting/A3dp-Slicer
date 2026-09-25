@@ -25,19 +25,25 @@ REQUIRED_DEV_PACKAGES=(
     m4
     texinfo
     wget
+	# for wxwebview
+    
+	libsoup*
+#	libglu1-mesa-dev
+#	libgstreamer-plugins-base1.0-dev
+#	libgconf2-dev
+#	libnotify-dev
 )
 
 if [[ -n "$FORCE_GTK2" ]]
 then
     REQUIRED_DEV_PACKAGES+=("libgtk2.0-dev")
-    # for wxwebview
-    #error, webview don't work anymore with gtk2
-    # this old version is full of security issues
-#    REQUIRED_DEV_PACKAGES+=("libwebkitgtk-1.0-dev")
-    REQUIRED_DEV_PACKAGES+=("libwebkit2gtk-4.0-dev")
+	# for wxwebview
+	#error, webview don't work anymore with gtk2
+	# this old version is full of security issues
+    REQUIRED_DEV_PACKAGES+=("libwebkitgtk-1.0-dev")
 else
     REQUIRED_DEV_PACKAGES+=("libgtk-3-dev")
-    # for wxwebview
+	# for wxwebview
     REQUIRED_DEV_PACKAGES+=("libwebkit2gtk-4.0-dev")
 fi
 

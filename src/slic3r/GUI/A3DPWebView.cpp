@@ -11,20 +11,10 @@
 #elif defined(__WXMAC__)
     #include <wx/osx/webview_webkit.h>
 #elif defined(__WXGTK__)
-    // Do NOT include <wx/gtk/webview_webkit.h> here: it declares
-    //     typedef struct _WebKitWebView WebKitWebView;
-    // which collides with the C++ forward declaration below on GTK3
-    // (error: using typedef-name 'WebKitWebView' after 'struct').
-    // We only need pointer-sized forward declarations for the extern "C"
-    // WebKit API block, and RunScript() uses WebKitWebView* only.
+    #include <wx/gtk/webview_webkit.h>
 #else
-    // (nothing platform-specific needed)
+    struct WebKitWebView;
 #endif
-// C++ forward declaration: the only form we use for the extern "C"
-// WebKit API block below (pointer arguments only). Must not coexist
-// with the C typedef from wx/gtk/webview_webkit.h (hence the
-// __WXGTK__ branch above does not include that header).
-struct WebKitWebView;
 #include <wx/uri.h>
 #if defined(__WIN32__) || defined(__WXMAC__)
 #include "wx/private/jsscriptwrapper.h"
