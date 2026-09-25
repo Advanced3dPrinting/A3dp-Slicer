@@ -4003,7 +4003,10 @@ void PrintObject::bridge_over_infill()
                 Polygons expansion_area;
                 Polygons total_fill_area;
                 Polygons internal_unsupported_area;
+                Polygons total_top_area;
                 for (const LayerRegion *region : layer->regions()) {
+                    Polygons top_polys = to_polygons(region->fill_surfaces().filter_by_types({(stPosTop | stDensSolid), (stPosTop | stDensSparse), (stPosTop | stDensVoid)}));
+                    total_top_area.insert(total_top_area.end(), top_polys.begin(), top_polys.end());
                     Polygons internal_polys = to_polygons(region->fill_surfaces().filter_by_types({(stPosInternal | stDensSparse), (stPosInternal | stDensSparse | stModBridge), (stPosInternal | stDensSolid)}));
                     expansion_area.insert(expansion_area.end(), internal_polys.begin(), internal_polys.end());
                     Polygons fill_polys = to_polygons(region->fill_expolygons());
@@ -4128,6 +4131,9 @@ void PrintObject::bridge_over_infill()
                     bridging_area          = closing(bridging_area, flow.scaled_spacing());
                     bridging_area          = intersection(bridging_area, limiting_area);
                     bridging_area          = intersection(bridging_area, total_fill_area);
+                    // SPE-2477 (PrusaSlicer): never bridge on top surfaces - they are visible faces,
+                    // bridging flow there produces ugly/weak top surfaces.
+                    bridging_area          = diff(bridging_area, total_top_area);
                     expansion_area         = diff(expansion_area, bridging_area);
 
 #ifdef DEBUG_BRIDGE_OVER_INFILL
