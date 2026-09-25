@@ -1843,7 +1843,8 @@ bool GUI_App::on_init_inner()
                 //plater_->set_physical_printer_config(selected_printer_config);
 
 
-    update_mode(); // update view mode after fix of the object_list size
+    if (is_editor())
+        update_mode(); // update view mode after fix of the object_list size
 
 #ifdef __APPLE__
     other_instance_message_handler()->bring_instance_forward();
