@@ -1206,6 +1206,10 @@ void Selection::scale_to_fit_print_volume(const BuildVolume& volume)
         double max_z = 0.0;
         for (unsigned int i : m_list) {
             const GLVolume& v = *(m_volumes->volumes)[i].get();
+            if (v.convex_hull() == nullptr) {
+                // E.g. negative meshes do not have a convex hull... (hotfix for SPE-2361, from PrusaSlicer)
+                continue;
+            }
             TriangleMesh hull_3d = *v.convex_hull();
             hull_3d.transform(v.world_matrix());
             max_z = std::max(max_z, hull_3d.bounding_box().size().z());
