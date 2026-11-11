@@ -87,6 +87,11 @@ jobs:
       with:
         key: macos_intel_2.7
         path: deps/build/destdir
+    - if: steps.cache-action.outputs.cache-hit != 'true'
+      name: build deps if cache miss
+      run: |
+        mkdir -p deps/build
+        ./BuildMacOS.sh -d
     - name: build slicer
       run: ./BuildMacOS.sh -si
     - name: Upload artifact
