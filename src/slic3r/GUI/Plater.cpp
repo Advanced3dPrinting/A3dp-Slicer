@@ -2955,6 +2955,10 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         config.disable_optionals();
                         // and place the loaded config over the base.
                         config += std::move(config_loaded);
+                        // Project files may carry values outside the current definition
+                        // ranges; clamp them so downstream phony computations don't throw
+                        // on them (e.g. per-filament percent options without extruder ctx).
+                        clamp_config_values_to_ranges(config);
                     }
                     if (!config_substitutions.empty())
                         show_substitutions_info(config_substitutions.get(), filename.string());

@@ -1879,6 +1879,13 @@ Points get_bed_shape(const DynamicPrintConfig &cfg);
 Points get_bed_shape(const PrintConfig &cfg);
 Points get_bed_shape(const SLAPrinterConfig &cfg);
 
+// Clamp numeric config values into their definition ranges. Project files saved by
+// other slicer versions (or via foreign imports) can carry values outside the current
+// definitions' ranges (e.g. negative raft_first_layer_expansion, extruder-selector 0);
+// loading a user's project must not hard-fail on them. Extruder-selector keys keep
+// their 0 = "default" sentinel untouched.
+void clamp_config_values_to_ranges(DynamicPrintConfig &config);
+
 std::string get_sla_suptree_prefix(const DynamicPrintConfig &config);
 
 // ModelConfig is a wrapper around DynamicPrintConfig with an addition of a timestamp.

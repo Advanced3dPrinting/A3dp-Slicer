@@ -980,6 +980,11 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
 {
     PrinterTechnology printer_technology = Preset::printer_technology(config);
 
+    // Project/config files saved by other slicer versions can carry values outside the
+    // current definition ranges; clamp them so validation and phony computations don't
+    // reject the file wholesale.
+    clamp_config_values_to_ranges(config);
+
     tmp_installed_presets.clear();
 
     // The "compatible_printers" field should not have been exported into a config.ini or a G-code anyway, 

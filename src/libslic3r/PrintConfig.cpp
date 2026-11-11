@@ -11497,6 +11497,65 @@ void DynamicPrintConfig::set_num_laser(unsigned int num_laser)
     }
 }
 
+// Clamp numeric config values into their definition ranges (see declaration in
+// PrintConfig.hpp). Extruder-selector keys keep their 0 = "default" sentinel.
+void clamp_config_values_to_ranges(DynamicPrintConfig &config)
+{
+    auto is_extruder_selector = [](const std::string &key) {
+        return key == "extruder" || (key.size() > 9 && key.compare(key.size() - 9, 9, "_extruder") == 0);
+    };
+    for (const std::string &opt_key : config.keys()) {
+        const ConfigOptionDef *def = print_config_def.get(opt_key);
+        ConfigOption *opt = config.optptr(opt_key);
+        if (def == nullptr || opt == nullptr)
+            continue;
+        switch (opt->type()) {
+        case coFloat: {
+            auto *o = static_cast<ConfigOptionFloat*>(opt);
+            o->value = std::min(std::max(o->value, def->min), def->max);
+            break; }
+        case coPercent: {
+            auto *o = static_cast<ConfigOptionPercent*>(opt);
+            o->value = std::min(std::max(o->value, def->min), def->max);
+            break; }
+        case coFloatOrPercent: {
+            auto *o = static_cast<ConfigOptionFloatOrPercent*>(opt);
+            o->value = std::min(std::max(o->value, def->min), def->max);
+            break; }
+        case coInt: {
+            auto *o = static_cast<ConfigOptionInt*>(opt);
+            if (is_extruder_selector(opt_key) && o->value == 0)
+                break;
+            o->value = int(std::min(std::max(double(o->value), def->min), def->max));
+            break; }
+        case coFloats: {
+            auto *o = static_cast<ConfigOptionFloats*>(opt);
+            for (size_t i = 0; i < o->size(); ++i)
+                o->set_at(std::min(std::max(o->get_at(i), def->min), def->max), i);
+            break; }
+        case coPercents: {
+            auto *o = static_cast<ConfigOptionPercents*>(opt);
+            for (size_t i = 0; i < o->size(); ++i)
+                o->set_at(std::min(std::max(o->get_at(i), def->min), def->max), i);
+            break; }
+        case coFloatsOrPercents: {
+            auto *o = static_cast<ConfigOptionFloatsOrPercents*>(opt);
+            for (size_t i = 0; i < o->size(); ++i)
+                o->get_at(i).value = std::min(std::max(o->get_at(i).value, def->min), def->max);
+            break; }
+        case coInts: {
+            auto *o = static_cast<ConfigOptionInts*>(opt);
+            for (size_t i = 0; i < o->size(); ++i) {
+                if (is_extruder_selector(opt_key) && o->get_at(i) == 0)
+                    continue;
+                o->set_at(int(std::min(std::max(double(o->get_at(i)), def->min), def->max)), i);
+            }
+            break; }
+        default: break;
+        }
+    }
+}
+
 std::string DynamicPrintConfig::validate()
 {
     // Full print config is initialized from the defaults.
@@ -12148,7 +12207,12 @@ std::string validate(const FullPrintConfig& cfg)
         case coInt:
         {
             auto *iopt = static_cast<const ConfigOptionInt*>(opt);
-            out_of_range = iopt->value < optdef->min || iopt->value > optdef->max;
+            // Extruder-selector keys store 0 = "default" (SuperSlicer UI convention).
+            // Don't range-check that sentinel, or project files saved with it fail to load.
+            if (iopt->value == 0 && (opt_key == "extruder" || (opt_key.size() > 9 && opt_key.compare(opt_key.size() - 9, 9, "_extruder") == 0)))
+                out_of_range = false;
+            else
+                out_of_range = iopt->value < optdef->min || iopt->value > optdef->max;
             break;
         }
         case coInts:
@@ -12158,6 +12222,8 @@ std::string validate(const FullPrintConfig& cfg)
                 if (!vec->is_enabled(i))
                     continue;
                 int v = vec->get_at(i);
+                if (v == 0 && (opt_key == "extruder" || (opt_key.size() > 9 && opt_key.compare(opt_key.size() - 9, 9, "_extruder") == 0)))
+                    continue;
                 if (v < optdef->min || v > optdef->max) {
                     out_of_range = true;
                     break;

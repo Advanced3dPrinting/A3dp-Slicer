@@ -1469,12 +1469,24 @@ double ConfigBase::get_computed_value(const t_config_option_key &opt_key, int ex
             if (extruder_id < 0) {
                 const ConfigOption* opt_extruder_id = nullptr;
                 if ((opt_extruder_id = this->option("extruder")) == nullptr)
-                    if ((opt_extruder_id = this->option("current_extruder")) == nullptr
-                        || opt_extruder_id->get_int() < 0 || opt_extruder_id->get_int() >= vector_opt->size()) {
+                    opt_extruder_id = this->option("current_extruder");
+                if (opt_extruder_id != nullptr) {
+                    int extruder_ctx = opt_extruder_id->get_int();
+                    if (extruder_ctx >= 0 && extruder_ctx < (int)vector_opt->size())
+                        extruder_id = extruder_ctx;
+                }
+                if (extruder_id < 0) {
+                    if (vector_opt->size() == 0) {
+                        // Genuinely unresolvable: no extruder context and no data at all.
                         std::stringstream ss; ss << "ConfigBase::get_abs_value(): " << opt_key << " need to has the extuder id to get the right value, but it's not available";
                         throw ConfigurationError(ss.str());
                     }
-                extruder_id = opt_extruder_id->get_int();
+                    // No extruder context available (e.g. importing a project file whose
+                    // config lacks the extruder key): fall back to the first filament
+                    // instead of killing the whole load. Same philosophy as Flow.cpp,
+                    // which uses full overlap when the extruder id is unknown.
+                    extruder_id = 0;
+                }
                 idx = extruder_id;
             }
         } else {

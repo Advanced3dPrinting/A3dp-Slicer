@@ -286,6 +286,9 @@ int CLI::run(int argc, char **argv)
                 // config is applied to m_print_config before the current m_config values.
                 config += std::move(m_print_config);
                 m_print_config = std::move(config);
+                // Project files may carry values outside the current definition ranges;
+                // clamp them so validation of the composite config doesn't reject the file.
+                clamp_config_values_to_ranges(m_print_config);
             }
             catch (std::exception& e) {
                 boost::nowide::cerr << file << ": " << e.what() << std::endl;
