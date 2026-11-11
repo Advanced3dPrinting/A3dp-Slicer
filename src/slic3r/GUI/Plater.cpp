@@ -272,20 +272,18 @@ static std::string extract_opt_key_from_error_message(const std::string& msg)
 
 // Jump to a config option's field on its owning settings tab (same mechanism
 // as the search UI's jump-to-option: find the tab whose config carries the key,
-// then let Tab::activate_option select the page and focus/blink the field).
+// take the page title (category) from the search index like Sidebar::jump_to_option
+// does, then let Tab::activate_option select the page and focus/blink the field).
 static void jump_to_config_option(const std::string& opt_key)
 {
-    const ConfigOptionDef* def = print_config_def.get(opt_key);
-    if (!def)
-        return;
-    const std::string category = def->category;
-    wxGetApp().CallAfter([opt_key, category]() {
+    wxGetApp().CallAfter([opt_key]() {
         for (Tab *tab : wxGetApp().tabs_list) {
             const DynamicPrintConfig *cfg = tab->get_config();
-            if (cfg && cfg->optptr(opt_key)) {
-                tab->activate_option(OptionKeyIdx::scalar(opt_key), from_u8(category));
-                return;
-            }
+            if (!cfg || !cfg->optptr(opt_key))
+                continue;
+            Slic3r::Search::SearchOption opt = wxGetApp().sidebar().get_searcher().get_option_names(opt_key, -1, tab->type());
+            tab->activate_option(OptionKeyIdx::scalar(opt_key), boost::nowide::narrow(opt.category));
+            return;
         }
     });
 }
@@ -330,7 +328,7 @@ static bool clamp_opt_key_everywhere(Plater* q, const std::string& opt_key)
         }
     };
     PresetBundle& bundle = *wxGetApp().preset_bundle;
-    fix_cfg(bundle.prints.get_edited_preset().config);
+    fix_cfg(bundle.fff_prints.get_edited_preset().config);
     fix_cfg(bundle.filaments.get_edited_preset().config);
     fix_cfg(bundle.printers.get_edited_preset().config);
     fix_cfg(bundle.sla_prints.get_edited_preset().config);
@@ -368,10 +366,10 @@ static std::vector<std::string> clear_custom_gcode_sections(const std::vector<st
                     changed = true;
                 }
             } else if (ConfigOptionStrings* o = cfg.opt<ConfigOptionStrings>(key)) {
-                bool any = std::any_of(o->values.begin(), o->values.end(), [](const std::string& s){ return !s.empty(); });
+                bool any = std::any_of(o->get_values().begin(), o->get_values().end(), [](const std::string& s){ return !s.empty(); });
                 if (any) {
-                    for (std::string& v : o->values)
-                        v.clear();
+                    std::vector<std::string> vals(o->size(), std::string());
+                    cfg.set_key_value(key, new ConfigOptionStrings(std::move(vals)));
                     changed = true;
                 }
             }
@@ -379,7 +377,7 @@ static std::vector<std::string> clear_custom_gcode_sections(const std::vector<st
         return changed;
     };
     PresetBundle& bundle = *wxGetApp().preset_bundle;
-    bool changed = clear_cfg(bundle.prints.get_edited_preset().config);
+    bool changed = clear_cfg(bundle.fff_prints.get_edited_preset().config);
     changed |= clear_cfg(bundle.filaments.get_edited_preset().config);
     changed |= clear_cfg(bundle.printers.get_edited_preset().config);
     if (changed) {
@@ -5384,7 +5382,7 @@ void Plater::priv::show_config_error_dialog(const std::string& msg, bool monospa
     std::string opt_key = extract_opt_key_from_error_message(msg);
     std::function<bool()> on_fix;
     if (!opt_key.empty() &&
-        (clamped_option_for(wxGetApp().preset_bundle->prints.get_edited_preset().config, opt_key) ||
+        (clamped_option_for(wxGetApp().preset_bundle->fff_prints.get_edited_preset().config, opt_key) ||
          clamped_option_for(wxGetApp().preset_bundle->filaments.get_edited_preset().config, opt_key) ||
          clamped_option_for(wxGetApp().preset_bundle->printers.get_edited_preset().config, opt_key) ||
          clamped_option_for(wxGetApp().preset_bundle->sla_prints.get_edited_preset().config, opt_key) ||
