@@ -10,6 +10,7 @@
 #include "libslic3r/Thread.hpp"
 #include "GUI_App.hpp"
 #include "GUI_Init.hpp"
+#include "SessionBackup.hpp"
 #include "GUI_ObjectList.hpp"
 #include "GUI_ObjectManipulation.hpp"
 #include "GUI_Factories.hpp"
@@ -1426,6 +1427,14 @@ bool GUI_App::on_init_inner()
     // TODO: remove this when all asserts are gone.
     wxDisableAsserts();
 
+    // Crash session backup: remember whether the PREVIOUS run shut down
+    // cleanly and arm the "session_dirty" flag for this run. The flag is only
+    // cleared in OnExit(), so it survives an unclean shutdown and marks the
+    // next startup as a post-crash start. Arming this early covers crashes
+    // during the rest of the startup as well.
+    if (is_editor())
+        SessionBackup::startup_mark_running();
+
     // Set initialization of image handlers before any UI actions - See GH issue #7469
     wxInitAllImageHandlers();
 
@@ -1880,6 +1889,28 @@ bool GUI_App::on_init_inner()
 
     m_initialized = true;
 
+    // Crash session backup: offer to restore the previous session if the last
+    // run did not shut down cleanly and a backup exists. startup_mark_running()
+    // (top of on_init_inner) captured the previous run's crash flag before it
+    // was overwritten.
+    if (is_editor() && SessionBackup::previous_run_crashed()) {
+        if (SessionBackup::backup_exists()) {
+            MessageDialog dialog(nullptr,
+                format_wxstr(_L("%1% did not shut down cleanly last time.\n\n"
+                    "Restore the previous session (project and unsaved preset changes)?"), SLIC3R_APP_NAME),
+                _L("Crash recovery"), wxYES_NO | wxICON_QUESTION);
+            dialog.SetButtonLabel(wxID_YES, _L("Restore session"));
+            dialog.SetButtonLabel(wxID_NO,  _L("Discard backup"));
+            if (dialog.ShowModal() == wxID_YES)
+                // Restore after the event loop starts, once the GUI is fully up.
+                CallAfter([]() { SessionBackup::restore(); });
+            else
+                SessionBackup::discard();
+        } else
+            // Nothing to restore: drop any stale state from the crashed run.
+            SessionBackup::discard();
+    }
+
     if (const std::string& crash_reason = app_config->get("restore_win_position");
         boost::starts_with(crash_reason,"crashed"))
     {
@@ -1910,6 +1941,16 @@ bool GUI_App::on_init_inner()
     }
 
     return true;
+}
+
+int GUI_App::OnExit()
+{
+    // Clean shutdown: clear the crash flag and remove the session backup.
+    // OnExit() is only called after the main event loop terminated normally,
+    // so a crash (which skips it) leaves the flag set for the next startup.
+    if (is_editor())
+        SessionBackup::clean_exit();
+    return wxApp::OnExit();
 }
 
 unsigned GUI_App::get_colour_approx_luma(const wxColour &colour)

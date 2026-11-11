@@ -529,6 +529,13 @@ void PreferencesDialog::build()
 				"Examples of such issues are floating object parts, unsupported extrusions and low bed adhesion."),
 			app_config->get_bool("alert_when_supports_needed"));
 
+		append_bool_option(m_tabid_2_optgroups.back().back(), "session_backup_enabled",
+			L("Enable crash session backup"),
+			L("If this is enabled, the current project and unsaved preset changes are periodically "
+				"saved into a session backup. If the application does not shut down cleanly, the "
+				"previous session can be restored on the next start."),
+			app_config->has("session_backup_enabled") ? app_config->get_bool("session_backup_enabled") : true);
+
         // auto_switch_preview
         {
             //convert from old 0-3 values

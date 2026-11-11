@@ -18,6 +18,7 @@
 ///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
 ///|/
 #include "Plater.hpp"
+#include "SessionBackup.hpp"
 #include "slic3r/GUI/BitmapCache.hpp"
 #include "slic3r/GUI/Jobs/UIThreadWorker.hpp"
 
@@ -6191,6 +6192,10 @@ void Plater::priv::take_snapshot(const std::string& snapshot_name, const UndoRed
     if (snapshot_type == UndoRedo::SnapshotType::ProjectSeparator && get_config_bool("clear_undo_redo_stack_on_new_project"))
         this->undo_redo_stack().clear();
     this->undo_redo_stack().take_snapshot(snapshot_name, model, view3D->get_canvas3d()->get_selection(), gizmos, snapshot_data);
+    // An undo/redo snapshot boundary is a session change (object add/remove/
+    // move, gizmo action, project separator ...): schedule a debounced crash
+    // session backup.
+    SessionBackup::schedule_backup();
     if (snapshot_type == UndoRedo::SnapshotType::LeavingGizmoWithAction) {
         // Filter all but the last UndoRedo::SnapshotType::GizmoAction in a row between the last UndoRedo::SnapshotType::EnteringGizmo and UndoRedo::SnapshotType::LeavingGizmoWithAction.
         // The remaining snapshot will be renamed to a more generic name,
@@ -6516,6 +6521,9 @@ void Plater::load_project(const wxString& filename, bool unbake_trsf)
         wxGetApp().update_saved_preset_from_current_preset();
         // Update Project dirty state, update application title bar.
         update_project_dirty_from_presets();
+        // A project was loaded: write a session backup right away so a crash
+        // right after the load still restores the freshly loaded project.
+        SessionBackup::schedule_backup(0);
     }
 }
 
@@ -8096,6 +8104,11 @@ void Plater::export_gcode(bool prefer_removable)
 
     if (!is_sliceable(s_print_statuses[s_multiple_beds.get_active_bed()]))
         return;
+
+    // The user is about to export the toolpaths: flush a session backup right
+    // away (queued, not blocking) so a crash during the export does not lose
+    // the last unsaved changes.
+    SessionBackup::schedule_backup(0);
 
     //check if the material is okay
     if (get_app_config()->get_bool("check_material_export")) {

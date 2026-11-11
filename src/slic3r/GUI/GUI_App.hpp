@@ -183,6 +183,7 @@ private:
 
 public:
     bool OnInit() override;
+    int  OnExit() override;
     bool initialized() const { return m_initialized; }
 
     explicit GUI_App(EAppMode mode = EAppMode::Editor);

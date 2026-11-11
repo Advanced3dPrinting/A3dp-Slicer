@@ -38,6 +38,7 @@
 #include "GLCanvas3D.hpp"
 #include "GraphDialog.hpp"
 #include "GUI_App.hpp"
+#include "SessionBackup.hpp"
 #include "GUI_ObjectList.hpp"
 #include "MainFrame.hpp"
 #include "MsgDialog.hpp"
@@ -1246,6 +1247,9 @@ void Tab::update_dirty()
     m_presets_choice->update_dirty();
     on_presets_changed();
     update_changed_ui();
+    // A preset / setting change was registered: schedule a debounced crash
+    // session backup (fires once, 10 s after the last change).
+    SessionBackup::schedule_backup();
 }
 
 void Tab::update_tab_ui()
