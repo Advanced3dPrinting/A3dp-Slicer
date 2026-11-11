@@ -23,10 +23,12 @@
 
 #include <cstddef>
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <nanosvgrast.h>
 #include <numeric>
 #include <optional>
+#include <set>
 #include <vector>
 #include <string>
 #include <regex>
@@ -179,6 +181,219 @@ wxDEFINE_EVENT(EVT_SLICING_COMPLETED,               wxCommandEvent);
 wxDEFINE_EVENT(EVT_PROCESS_COMPLETED,               SlicingProcessCompletedEvent);
 wxDEFINE_EVENT(EVT_EXPORT_BEGAN,                    wxCommandEvent);
 wxDEFINE_EVENT(EVT_REGENERATE_BED_THUMBNAILS, SimpleEvent);
+
+// ------------------------------------------------------------------
+// Config-error UX helpers: opt-key extraction, jump-to-setting, auto-fix.
+// ------------------------------------------------------------------
+
+// Custom G-code config options that carry machine-specific G-code. When such a
+// section fails to parse (e.g. imported from a foreign slicer and using macros
+// unknown to us), clearing it is the safe fix.
+static const std::set<std::string>& custom_gcode_option_keys()
+{
+    static const std::set<std::string> s_keys = {
+        "template_custom_gcode", "start_gcode", "end_gcode", "before_layer_gcode",
+        "layer_gcode", "feature_gcode", "toolchange_gcode", "between_objects_gcode",
+        "color_change_gcode", "pause_print_gcode", "start_filament_gcode", "end_filament_gcode" };
+    return s_keys;
+}
+
+// Extract custom G-code section names (config option keys) from a
+// "G-code export ... failed due to invalid custom G-code sections" error
+// message: the failed section names are listed one per line.
+static std::vector<std::string> extract_custom_gcode_sections(const std::string& msg)
+{
+    std::vector<std::string> out;
+    static const char marker[] = "invalid custom G-code sections";
+    size_t pos = msg.find(marker);
+    if (pos == std::string::npos)
+        return out;
+    pos += strlen(marker);
+    const std::set<std::string>& keys = custom_gcode_option_keys();
+    while (pos < msg.size()) {
+        size_t eol = msg.find('\n', pos);
+        std::string line = msg.substr(pos, eol == std::string::npos ? std::string::npos : eol - pos);
+        // trim
+        size_t b = line.find_first_not_of(" \t\r");
+        size_t e = line.find_last_not_of(" \t\r");
+        line = (b == std::string::npos) ? std::string() : line.substr(b, e - b + 1);
+        if (!line.empty() && line.rfind("Please inspect the file", 0) == 0)
+            break;
+        if (keys.find(line) != keys.end() && std::find(out.begin(), out.end(), line) == out.end())
+            out.push_back(line);
+        if (eol == std::string::npos)
+            break;
+        pos = eol + 1;
+    }
+    return out;
+}
+
+// Extract a config option key from a configuration error message.
+// Understands the common message formats
+//   "Value out of range: <opt_key>"              (config validation)
+//   "ConfigBase::get_abs_value(): <opt_key> ..." (value resolution errors)
+// and falls back to the longest whitespace-delimited token that is a defined
+// config option key. Returns an empty string when nothing matches.
+static std::string extract_opt_key_from_error_message(const std::string& msg)
+{
+    auto first_token = [](const std::string& s) {
+        size_t b = s.find_first_not_of(" \t\r\n");
+        if (b == std::string::npos)
+            return std::string();
+        size_t e = s.find_first_of(" \t\r\n", b);
+        return s.substr(b, e == std::string::npos ? std::string::npos : e - b);
+    };
+    static const char prefix_range[] = "Value out of range: ";
+    for (const char* prefix : { prefix_range, "get_abs_value(): " }) {
+        size_t pos = msg.find(prefix);
+        if (pos != std::string::npos) {
+            std::string key = first_token(msg.substr(pos + strlen(prefix)));
+            if (!key.empty() && print_config_def.get(key))
+                return key;
+        }
+    }
+    // Generic fallback: longest token that is a defined config option key.
+    std::string best;
+    size_t i = 0;
+    while (i < msg.size()) {
+        while (i < msg.size() && !isalnum((unsigned char)msg[i]) && msg[i] != '_')
+            ++i;
+        size_t b = i;
+        while (i < msg.size() && (isalnum((unsigned char)msg[i]) || msg[i] == '_'))
+            ++i;
+        if (i > b) {
+            std::string token = boost::algorithm::to_lower_copy(msg.substr(b, i - b));
+            if (token.size() > best.size() && print_config_def.get(token))
+                best = token;
+        }
+    }
+    return best;
+}
+
+// Jump to a config option's field on its owning settings tab (same mechanism
+// as the search UI's jump-to-option: find the tab whose config carries the key,
+// then let Tab::activate_option select the page and focus/blink the field).
+static void jump_to_config_option(const std::string& opt_key)
+{
+    const ConfigOptionDef* def = print_config_def.get(opt_key);
+    if (!def)
+        return;
+    const std::string category = def->category;
+    wxGetApp().CallAfter([opt_key, category]() {
+        for (Tab *tab : wxGetApp().tabs_list) {
+            const DynamicPrintConfig *cfg = tab->get_config();
+            if (cfg && cfg->optptr(opt_key)) {
+                tab->activate_option(OptionKeyIdx::scalar(opt_key), from_u8(category));
+                return;
+            }
+        }
+    });
+}
+
+// Clamp a single option key's value into its definition range, operating on a
+// clone of cfg's current value. Returns the fixed option, or nullptr when the
+// key is absent from cfg or already inside its range (no change).
+static std::unique_ptr<ConfigOption> clamped_option_for(const DynamicPrintConfig& cfg, const std::string& opt_key)
+{
+    const ConfigOption* opt = cfg.optptr(opt_key);
+    if (!opt)
+        return nullptr;
+    DynamicPrintConfig tmp;
+    tmp.set_key_value(opt_key, opt->clone());
+    clamp_config_values_to_ranges(tmp);
+    ConfigOption* fixed = tmp.optptr(opt_key);
+    if (!fixed || fixed->serialize() == opt->serialize())
+        return nullptr;
+    return std::unique_ptr<ConfigOption>(fixed->clone());
+}
+
+// Refresh the settings tabs after a direct edit of the edited presets' configs:
+// flag the presets dirty and reload the page fields from the edited config.
+static void refresh_tabs_after_direct_config_edit()
+{
+    for (Tab *tab : wxGetApp().tabs_list) {
+        tab->update_dirty();
+        tab->reload_config();
+    }
+}
+
+// Clamp opt_key into its definition range on the edited presets and on model
+// object/volume config overrides. Returns true when at least one value changed.
+static bool clamp_opt_key_everywhere(Plater* q, const std::string& opt_key)
+{
+    bool changed = false;
+    auto fix_cfg = [&](DynamicPrintConfig& cfg) {
+        auto fixed = clamped_option_for(cfg, opt_key);
+        if (fixed) {
+            cfg.set_key_value(opt_key, fixed.release());
+            changed = true;
+        }
+    };
+    PresetBundle& bundle = *wxGetApp().preset_bundle;
+    fix_cfg(bundle.prints.get_edited_preset().config);
+    fix_cfg(bundle.filaments.get_edited_preset().config);
+    fix_cfg(bundle.printers.get_edited_preset().config);
+    fix_cfg(bundle.sla_prints.get_edited_preset().config);
+    fix_cfg(bundle.sla_materials.get_edited_preset().config);
+    auto fix_mc = [&](ModelConfig& mc) {
+        auto fixed = clamped_option_for(mc.get(), opt_key);
+        if (fixed) {
+            DynamicPrintConfig copy = mc.get();
+            copy.set_key_value(opt_key, fixed.release());
+            mc.assign_config(std::move(copy));
+            changed = true;
+        }
+    };
+    for (ModelObject *obj : q->model().objects) {
+        fix_mc(obj->config);
+        for (ModelVolume *vol : obj->volumes)
+            fix_mc(vol->config);
+    }
+    if (changed)
+        refresh_tabs_after_direct_config_edit();
+    return changed;
+}
+
+// Clear (empty) the given custom G-code config options on the edited presets.
+// Returns the list of sections that were actually cleared.
+static std::vector<std::string> clear_custom_gcode_sections(const std::vector<std::string>& sections)
+{
+    std::vector<std::string> cleared;
+    auto clear_cfg = [&](DynamicPrintConfig& cfg) -> bool {
+        bool changed = false;
+        for (const std::string& key : sections) {
+            if (ConfigOptionString* o = cfg.opt<ConfigOptionString>(key)) {
+                if (!o->value.empty()) {
+                    o->value.clear();
+                    changed = true;
+                }
+            } else if (ConfigOptionStrings* o = cfg.opt<ConfigOptionStrings>(key)) {
+                bool any = std::any_of(o->values.begin(), o->values.end(), [](const std::string& s){ return !s.empty(); });
+                if (any) {
+                    for (std::string& v : o->values)
+                        v.clear();
+                    changed = true;
+                }
+            }
+        }
+        return changed;
+    };
+    PresetBundle& bundle = *wxGetApp().preset_bundle;
+    bool changed = clear_cfg(bundle.prints.get_edited_preset().config);
+    changed |= clear_cfg(bundle.filaments.get_edited_preset().config);
+    changed |= clear_cfg(bundle.printers.get_edited_preset().config);
+    if (changed) {
+        cleared = sections;
+        refresh_tabs_after_direct_config_edit();
+    }
+    return cleared;
+}
+
+// Show the config-error dialog for a slicing / export error message, offering
+// "Open setting" (when the message names a config option) and "Auto-fix"
+// (clamping an out-of-range value, or clearing failed custom G-code sections).
+// Implemented as Plater::priv::show_config_error_dialog() further below (needs
+// the priv state); see its implementation for the exact dialog buttons.
 
 
 bool Plater::has_illegal_filename_characters(const wxString& wxs_name)
@@ -2223,6 +2438,9 @@ struct Plater::priv
 			GUI::show_error(this->q, msg);
 		}
 	}
+    // Error dialog for slicing / export configuration errors, with "Open setting"
+    // and (when a safe fix exists) "Auto-fix" / "Clear foreign sections and re-slice".
+    void show_config_error_dialog(const std::string& msg, bool monospace);
     void export_gcode(fs::path output_path, bool output_path_on_removable_media, PrintHostJob upload_job);
     void reload_from_disk();
     bool replace_volume_with_stl(int object_idx, int volume_idx, const fs::path& new_path, const wxString& snapshot = "");
@@ -3048,7 +3266,15 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
             }
         } catch (const ConfigurationError &e) {
             std::string message = GUI::format(_L("Failed loading file \"%1%\" due to an invalid configuration."), filename.string()) + "\n\n" + e.what();
-            GUI::show_error(q, message);
+            std::string opt_key = extract_opt_key_from_error_message(e.what());
+            if (!opt_key.empty()) {
+                // The offending option key is known: offer to jump to its setting.
+                // (Auto-fix is not available here - the failing value lives inside
+                // the file being loaded, already abandoned by the failed load.)
+                auto on_jump = [](const std::string& key) { jump_to_config_option(key); };
+                ConfigErrorDialog(q, message, false, opt_key, on_jump).ShowModal();
+            } else
+                GUI::show_error(q, message);
             continue;
         } catch (const std::exception &e) {
             GUI::show_error(q, e.what());
@@ -4042,8 +4268,14 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
         }
         else {
             // The print is not valid.
-            // Show error as notification.
-            notification_manager->push_validate_error_notification(err.second);
+            // Show error as notification. When the message names a config option,
+            // add an "Open setting" hypertext action jumping to that option.
+            std::string err_opt_key = extract_opt_key_from_error_message(err.second);
+            if (!err_opt_key.empty())
+                notification_manager->push_validate_error_notification(err.second, _u8L("Open setting"),
+                    [err_opt_key](wxEvtHandler*) { jump_to_config_option(err_opt_key); return true; });
+            else
+                notification_manager->push_validate_error_notification(err.second);
             return_state |= UPDATE_BACKGROUND_PROCESS_INVALID;
             if (printer_technology == ptFFF) {
                 GLCanvas3D* canvas = view3D->get_canvas3d();
@@ -5102,6 +5334,76 @@ bool Plater::priv::warnings_dialog()
 	return res == wxID_OK;
 
 }
+// Config-error dialog for slicing / export errors: "Open setting" jumps to the
+// offending option's field, "Auto-fix" clamps an out-of-range value (offered
+// only when clamping would actually change it), "Clear foreign sections and
+// re-slice" empties custom G-code sections that failed to parse and re-runs
+// the export. The dialog closes only after a fix that re-validated OK.
+void Plater::priv::show_config_error_dialog(const std::string& msg, bool monospace)
+{
+    auto on_jump = [](const std::string& key) { jump_to_config_option(key); };
+
+    // 1) G-code export failed on custom G-code sections: offer to clear them and re-slice/export.
+    std::vector<std::string> sections = extract_custom_gcode_sections(msg);
+    if (!sections.empty()) {
+        auto cleared = std::make_shared<std::vector<std::string>>();
+        auto on_fix = [this, sections, cleared]() -> bool {
+            *cleared = clear_custom_gcode_sections(sections);
+            if (cleared->empty())
+                return false;
+            unsigned int state = this->update_background_process(true);
+            if ((state & priv::UPDATE_BACKGROUND_PROCESS_INVALID) != 0)
+                return false;
+            // Report what was cleared once the dialog is closed.
+            Plater *q = this->q;
+            wxGetApp().CallAfter([q, cleared]() {
+                wxString list;
+                for (const std::string& key : *cleared) {
+                    list += "\n    ";
+                    list += from_u8(key);
+                }
+                show_info(q, _L("Cleared invalid custom G-code sections (marked the presets as modified):") + list, _L("Auto-fix"));
+            });
+            // Re-run the export that failed (plain file export only; uploads are not retried).
+            if (!this->last_output_path.empty() && this->exporting_status != ExportingStatus::NOT_EXPORTING) {
+                bool removable = this->exporting_status == ExportingStatus::EXPORTING_TO_REMOVABLE;
+                std::string path = this->last_output_path;
+                wxGetApp().CallAfter([this, path, removable]() {
+                    this->export_gcode(fs::path(path), removable, PrintHostJob());
+                });
+            }
+            return true;
+        };
+        ConfigErrorDialog(q, msg, monospace, std::string(), on_jump, on_fix,
+                          _L("Clear foreign sections and re-slice")).ShowModal();
+        return;
+    }
+
+    // 2) Configuration value errors: jump to the option, and offer Auto-fix
+    //    when clamping the value into its definition range would change it.
+    std::string opt_key = extract_opt_key_from_error_message(msg);
+    std::function<bool()> on_fix;
+    if (!opt_key.empty() &&
+        (clamped_option_for(wxGetApp().preset_bundle->prints.get_edited_preset().config, opt_key) ||
+         clamped_option_for(wxGetApp().preset_bundle->filaments.get_edited_preset().config, opt_key) ||
+         clamped_option_for(wxGetApp().preset_bundle->printers.get_edited_preset().config, opt_key) ||
+         clamped_option_for(wxGetApp().preset_bundle->sla_prints.get_edited_preset().config, opt_key) ||
+         clamped_option_for(wxGetApp().preset_bundle->sla_materials.get_edited_preset().config, opt_key) ||
+         std::any_of(q->model().objects.begin(), q->model().objects.end(), [&](const ModelObject* obj) {
+             return (bool)clamped_option_for(obj->config.get(), opt_key) ||
+                    std::any_of(obj->volumes.begin(), obj->volumes.end(), [&](const ModelVolume* vol) {
+                        return (bool)clamped_option_for(vol->config.get(), opt_key);
+                     });
+         })))
+        on_fix = [this, opt_key]() -> bool {
+            if (!clamp_opt_key_everywhere(this->q, opt_key))
+                return false;
+            unsigned int state = this->update_background_process(true);
+            return (state & priv::UPDATE_BACKGROUND_PROCESS_INVALID) == 0;
+        };
+    ConfigErrorDialog(q, msg, monospace, opt_key, on_jump, on_fix).ShowModal();
+}
+
 void Plater::priv::on_process_completed(SlicingProcessCompletedEvent &evt)
 {
     // Stop the background task, wait until the thread goes into the "Idle" state.
@@ -5132,7 +5434,7 @@ void Plater::priv::on_process_completed(SlicingProcessCompletedEvent &evt)
                 // We postpone the error message instead.
                 q->m_tracking_popup_menu_error_message = message.first;
             } else {
-                show_error(q, message.first, message.second);
+                this->show_config_error_dialog(message.first, message.second);
                 notification_manager->set_slicing_progress_hidden();
                 notification_manager->stop_delayed_notifications_of_type(NotificationType::ExportOngoing);
             }

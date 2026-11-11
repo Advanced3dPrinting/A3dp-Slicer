@@ -2162,9 +2162,9 @@ void NotificationManager::push_delayed_notification(const NotificationType type,
 		push_delayed_notification_data(std::make_unique<PopNotification>(*it, m_id_provider, m_evt_handler), condition_callback, initial_delay, delay_interval);
 }
 
-void NotificationManager::push_validate_error_notification(const std::string& text)
+void NotificationManager::push_validate_error_notification(const std::string& text, const std::string& hypertext, std::function<bool(wxEvtHandler*)> callback)
 {
-	push_notification_data({ NotificationType::ValidateError, NotificationLevel::ErrorNotificationLevel, 0,  _u8L("ERROR:") + "\n" + text }, 0);
+	push_notification_data({ NotificationType::ValidateError, NotificationLevel::ErrorNotificationLevel, 0,  _u8L("ERROR:") + "\n" + text, hypertext, std::move(callback) }, 0);
 	set_slicing_progress_hidden();
 }
 

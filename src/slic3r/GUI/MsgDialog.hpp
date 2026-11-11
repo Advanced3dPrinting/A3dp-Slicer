@@ -91,6 +91,48 @@ private:
 };
 
 
+// Error dialog for configuration errors (project load / slicing / G-code export)
+// that carries the offending config option key. In addition to OK it offers:
+//  - "Open setting"  : jumps to the option's field on its owning settings tab,
+//    enabled when an opt_key was recognized in the message (on_jump provided).
+//  - "Auto-fix"      : runs a caller-provided fix (e.g. clamp the value into its
+//    definition range, clear foreign custom G-code sections). The dialog closes
+//    only when the fix reports success (re-validation passed); otherwise it
+//    stays open so the user can cancel and keep the plain error text.
+class ConfigErrorDialog : public MsgDialog
+{
+public:
+	static constexpr wxWindowID ID_JUMP_TO_SETTING = wxID_HIGHEST + 1;
+	static constexpr wxWindowID ID_AUTO_FIX        = wxID_HIGHEST + 2;
+
+	// msg            : error text (shown as HTML, like ErrorDialog)
+	// monospaced_font: render msg with preserved formatting (template errors)
+	// opt_key        : offending config option key, empty when not recognized
+	// on_jump        : called with opt_key on "Open setting"; empty = no button
+	// on_autofix     : applies the fix, returns true when the config is valid
+	//                  afterwards; empty = no button
+	// autofix_label  : label override for the Auto-fix button
+	ConfigErrorDialog(wxWindow *parent, const wxString &msg, bool monospaced_font,
+	                  const std::string &opt_key,
+	                  const std::function<void(const std::string&)> &on_jump         = std::function<void(const std::string&)>(),
+	                  const std::function<bool()>              &on_autofix           = std::function<bool()>(),
+	                  const wxString                           &autofix_label        = wxString());
+	ConfigErrorDialog(ConfigErrorDialog &&) = delete;
+	ConfigErrorDialog(const ConfigErrorDialog &) = delete;
+	ConfigErrorDialog &operator=(ConfigErrorDialog &&) = delete;
+	ConfigErrorDialog &operator=(const ConfigErrorDialog &) = delete;
+	virtual ~ConfigErrorDialog() = default;
+
+private:
+	void create(const HtmlContent& content, int icon_width);
+
+	HtmlContent m_content;
+	std::string m_opt_key;
+	std::function<void(const std::string&)> m_on_jump;
+	std::function<bool()> m_on_autofix;
+};
+
+
 // Generic warning dialog, used for displaying exceptions
 class WarningDialog : public MsgDialog
 {

@@ -251,6 +251,46 @@ ErrorDialog::ErrorDialog(wxWindow *parent, const wxString &msg, const std::funct
     create(m_content, 84);
 }
 
+// ConfigErrorDialog
+
+ConfigErrorDialog::ConfigErrorDialog(wxWindow *parent, const wxString &msg, bool monospaced_font,
+                                     const std::string &opt_key,
+                                     const std::function<void(const std::string&)> &on_jump,
+                                     const std::function<bool()> &on_autofix,
+                                     const wxString &autofix_label)
+    : MsgDialog(parent, wxString::Format(_L("%s error"), SLIC3R_APP_NAME),
+                        wxString::Format(_L("%s has encountered an error"), SLIC3R_APP_NAME), wxOK)
+    , m_content(HtmlContent{ msg, monospaced_font, true })
+    , m_opt_key(opt_key)
+    , m_on_jump(on_jump)
+    , m_on_autofix(on_autofix)
+{
+    create(m_content, monospaced_font ? 48 : 84);
+
+    if (!m_opt_key.empty() && m_on_jump) {
+        wxButton *btn = add_button(ID_JUMP_TO_SETTING, false, _L("Open setting"));
+        btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (m_on_jump)
+                m_on_jump(m_opt_key);
+        });
+    }
+    if (m_on_autofix) {
+        // Created manually (not via add_button) so the default EndModal binding
+        // is not attached: the dialog must stay open when the fix fails.
+        wxButton *btn = new wxButton(this, ID_AUTO_FIX, autofix_label.IsEmpty() ? _L("Auto-fix") : autofix_label);
+        wxGetApp().SetWindowVariantForButton(btn);
+        btn_sizer->Add(btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, HORIZ_SPACING);
+        btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (m_on_autofix && m_on_autofix())
+                this->EndModal(ID_AUTO_FIX);
+        });
+    }
+    if (btn_sizer)
+        btn_sizer->Layout();
+    Fit();
+    CenterOnParent();
+}
+
 
 HtmlCapableRichMessageDialog::HtmlCapableRichMessageDialog(wxWindow                                       *parent,
                                                            const wxString                                 &msg,
