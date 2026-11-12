@@ -59,8 +59,14 @@ public:
     // The backup is deleted on success, kept on failure.
     static bool restore();
 
+    // While the "restore previous session?" prompt is unanswered, all backups
+    // are suppressed: the new run's own startup changes must never overwrite
+    // the crashed session's backup before the user has decided.
+    static void set_prompt_pending(bool pending) { s_prompt_pending = pending; }
+
 private:
     static bool s_prev_run_crashed;
+    static bool s_prompt_pending;
 };
 
 } // namespace GUI

@@ -34,6 +34,7 @@ namespace Slic3r {
 namespace GUI {
 
 bool SessionBackup::s_prev_run_crashed = false;
+bool SessionBackup::s_prompt_pending  = false;
 
 namespace {
 
@@ -306,7 +307,7 @@ void SessionBackup::clean_exit()
 
 void SessionBackup::schedule_backup(int delay_ms)
 {
-    if (! enabled() || wxGetApp().is_gcode_viewer())
+    if (! enabled() || wxGetApp().is_gcode_viewer() || s_prompt_pending)
         return;
     // wxTimer::Start() restarts a running timer, so repeated calls coalesce
     // into a single backup delay_ms after the last change.
@@ -316,7 +317,9 @@ void SessionBackup::schedule_backup(int delay_ms)
 void SessionBackup::backup_now()
 {
     backup_timer().Stop();
-    if (! enabled() || wxGetApp().is_gcode_viewer())
+    if (! enabled() || wxGetApp().is_gcode_viewer() || s_prompt_pending)
+        // While the crash-recovery prompt is unanswered, never write: the new
+        // run's startup changes would overwrite the crashed session's backup.
         return;
     // Skip if another backup is already running (the export runs on the main
     // thread, so this only guards against re-entry).

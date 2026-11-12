@@ -1895,13 +1895,20 @@ bool GUI_App::on_init_inner()
     // was overwritten.
     if (is_editor() && SessionBackup::previous_run_crashed()) {
         if (SessionBackup::backup_exists()) {
+            // Suppress backups while the prompt is open: this run's own startup
+            // changes must not overwrite the crashed session's backup before
+            // the user has decided (a debounce timer can fire inside the modal
+            // event loop).
+            SessionBackup::set_prompt_pending(true);
             MessageDialog dialog(nullptr,
                 format_wxstr(_L("%1% did not shut down cleanly last time.\n\n"
                     "Restore the previous session (project and unsaved preset changes)?"), SLIC3R_APP_NAME),
                 _L("Crash recovery"), wxYES_NO | wxICON_QUESTION);
             dialog.SetButtonLabel(wxID_YES, _L("Restore session"));
             dialog.SetButtonLabel(wxID_NO,  _L("Discard backup"));
-            if (dialog.ShowModal() == wxID_YES)
+            const bool restore_session = dialog.ShowModal() == wxID_YES;
+            SessionBackup::set_prompt_pending(false);
+            if (restore_session)
                 // Restore after the event loop starts, once the GUI is fully up.
                 CallAfter([]() { SessionBackup::restore(); });
             else
