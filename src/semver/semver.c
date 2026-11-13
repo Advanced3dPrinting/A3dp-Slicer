@@ -217,8 +217,19 @@ semver_parse_version (const char *str, semver_t *ver) {
       ver->counters = NULL;
   }
   ver->counter_size = semver_count_version(str);
+  if (ver->counter_size < 0) {
+      /* semver_count_version signaled a parse error (e.g. an over-long
+       * slice). Without this guard the code below would malloc((size_t)-1)
+       * -> NULL and write through it. */
+      ver->counter_size = 0;
+      return -1;
+  }
   if (ver->counter_size != 0) {
       ver->counters = malloc(ver->counter_size * sizeof(int));
+      if (ver->counters == NULL) {
+          ver->counter_size = 0;
+          return -1;
+      }
 
       while (slice != NULL && index++ < 4) {
           next = strchr(slice, DELIMITER[0]);
@@ -315,6 +326,13 @@ semver_compare_prerelease (semver_t x, semver_t y) {
 int
 semver_compare_version (semver_t x, semver_t y) {
   int res = binary_comparison(x.counter_size, y.counter_size);
+
+  /* Guard against malformed/corrupted versions: counter_size > 0 with a NULL
+   * counters array would segfault on the dereference below. Such versions
+   * compare by counter_size only. */
+  if (x.counters == NULL || y.counters == NULL) {
+      return res;
+  }
 
   for (int i = 0; i < x.counter_size && i < y.counter_size; i++) {
       if ((res = binary_comparison(x.counters[i], y.counters[i])) != 0)
