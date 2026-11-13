@@ -10,6 +10,7 @@
 #include <wx/string.h>
 
 #include "Moonraker.hpp"
+#include "PrintHost.hpp"
 
 namespace Slic3r {
 
@@ -36,7 +37,8 @@ struct FilamentSlot
 };
 
 // Snapmaker U1 print host: stock Moonraker underneath (upload/print, port
-// auto-probe 7125->80 from v1), plus on-demand filament slot sync.
+// auto-probe 7125->80 from v1), plus on-demand filament slot sync (v2) and
+// websocket print start with options + filament->toolhead map_table (v3).
 class SnapmakerU1 : public Moonraker
 {
 public:
@@ -47,6 +49,15 @@ public:
     wxString get_test_ok_msg() const override;
     wxString get_test_failed_msg(wxString &msg) const override;
 
+    // v3: "Send to printer" with StartPrint. On firmware >= 1.3.0 the upload is
+    // posted without the print trigger and the print is started with a
+    // websocket JSON-RPC server.files.start_local_print carrying the print-start
+    // options (bed_level / flow_calibrate / time_lapse_camera as 0/1 ints) and
+    // the filament->toolhead map_table derived from the current per-extruder
+    // filament assignment. Older firmware (or no websocket-capable libcurl)
+    // falls back to the plain upload + print=true Moonraker path.
+    bool upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, ErrorFn error_fn, InfoFn info_fn) const override;
+
     // GET /printer/objects/query?print_task_config&filament_detect, then match
     // each loaded slot against the filament presets in the given PresetBundle
     // (nullptr = the running app's bundle). printer_model (e.g. "Snapmaker U1")
@@ -55,6 +66,33 @@ public:
     // refresh), no background thread.
     bool get_filament_slots(std::vector<FilamentSlot> &out, wxString &error, PresetBundle *preset_bundle = nullptr,
                             const std::string &printer_model = std::string()) const;
+
+protected:
+    // Captures moonraker_version (the U1 firmware version, read from /etc/VERSION)
+    // and computes whether server.files.start_local_print is available.
+    void on_server_info(const std::string &moonraker_version) const override;
+
+private:
+    // Firmware >= 1.3.0 applies the print options of server.files.start_local_print
+    // (Snapmaker's own client uses it from 1.3.0 on).
+    static bool firmware_supports_print_options(const std::string &firmware_version);
+
+    // Sends one JSON-RPC request over a short-lived websocket connection to
+    // /websocket and waits for its answer (Moonraker does not serve
+    // server.files.start_local_print over HTTP). Sets result_json to the
+    // answer's result, or error to the reason it failed.
+    bool ws_jsonrpc_request(const std::string &method, const std::string &params_json,
+                            long timeout_seconds, std::string &result_json, std::string &error) const;
+
+    // Fetches the filament slots and maps each extruder's selected filament
+    // preset to the toolhead whose slot matched the same preset. Unmatched
+    // extruders are left out (firmware default: extruder i -> toolhead i).
+    PrintHostPrintStartOptions build_print_start_options(wxString &error) const;
+
+    // mutable: test() and upload() are const, but the captured firmware state
+    // is per-instance connection state (single-threaded upload path).
+    mutable std::string m_fw_version;
+    mutable bool        m_fw_print_options_supported = false;
 };
 
 } // namespace Slic3r

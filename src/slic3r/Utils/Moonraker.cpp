@@ -140,7 +140,9 @@ bool Moonraker::do_test(const std::string &url, wxString& msg) const
                 res = false;
                 return;
             }
-            BOOST_LOG_TRIVIAL(info) << boost::format("%1%: Got version: %2%") % name % ptree.front().second.get_optional<std::string>("moonraker_version");
+            const std::string version = ptree.front().second.get<std::string>("moonraker_version", "");
+            BOOST_LOG_TRIVIAL(info) << boost::format("%1%: Got version: %2%") % name % version;
+            on_server_info(version);
         } catch (const std::exception&) {
             res = false;
             msg = "Could not parse server response";

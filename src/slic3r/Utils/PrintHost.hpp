@@ -10,6 +10,8 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
+#include <vector>
 #include <functional>
 #include <boost/filesystem/path.hpp>
 #include <boost/optional.hpp>
@@ -34,6 +36,20 @@ enum class PrintHostPostUploadAction {
 using PrintHostPostUploadActions = enum_bitmask<PrintHostPostUploadAction>;
 ENABLE_ENUM_BITMASK_OPERATORS(PrintHostPostUploadAction);
 
+// Print-start options for hosts that start a print with a dedicated start-print
+// request instead of the upload's own "print now" trigger (Snapmaker U1:
+// websocket server.files.start_local_print). Set by the send dialog; consumed
+// by the print host when the post action is StartPrint.
+struct PrintHostPrintStartOptions
+{
+    bool bed_level      = false;
+    bool flow_calibrate = false;
+    bool time_lapse     = false;
+    // filament (logical extruder) -> toolhead (physical extruder) pairs for the
+    // start request. Empty = firmware default (extruder i prints from toolhead i).
+    std::vector<std::pair<int, int>> map_table;
+};
+
 struct PrintHostUpload
 {
     boost::filesystem::path source_path;
@@ -43,6 +59,10 @@ struct PrintHostUpload
     std::string storage;
 
     PrintHostPostUploadAction post_action { PrintHostPostUploadAction::None };
+
+    // Only consumed by hosts that honour it (see struct comment); ignored by
+    // every other host.
+    PrintHostPrintStartOptions print_start_options;
 };
 
 inline std::optional<std::string> to_std_opt_str(const boost::optional<std::string> &str) {

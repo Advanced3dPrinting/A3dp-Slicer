@@ -57,6 +57,9 @@ protected:
     mutable std::string m_host_probed;
 
     virtual void set_auth(Http &http) const;
+    // Called with the moonraker_version reported by /server/info when a
+    // connection test succeeds. Default: ignore.
+    virtual void on_server_info(const std::string &moonraker_version) const { (void)moonraker_version; }
     std::string make_url(const std::string &path) const;
     // Host actually used for requests: equals m_host, unless the port probe in
     // test() found Moonraker on a different port (stock Snapmaker U1 firmware

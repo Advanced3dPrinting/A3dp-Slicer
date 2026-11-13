@@ -6,13 +6,39 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <exception>
+#include <regex>
 #include <sstream>
+#include <tuple>
+#include <atomic>
+
 #include <boost/algorithm/string.hpp>
 #include <boost/format.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
+
+#include <curl/curl.h>
+// The websocket API (curl_ws_send/recv) is stable since libcurl 8.11.0. The
+// fork's bundled deps curl is 7.75.0 (no websocket support at all), so the
+// websocket path compiles out there and the plain upload+print fallback is
+// the only code path built by CI. Local builds (system libcurl >= 8.11) get
+// the full feature.
+#if defined(LIBCURL_VERSION_NUM) && LIBCURL_VERSION_NUM >= 0x080B00
+#define SNAPMAKER_HAS_CURL_WS 1
+#include <curl/websockets.h>
+#endif
+
+#include <nlohmann/json.hpp>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <sys/socket.h>
+#include <sys/time.h>
+#endif
 
 #include "Http.hpp"
 #include "slic3r/GUI/GUI.hpp"
@@ -470,6 +496,334 @@ bool SnapmakerU1::get_filament_slots(std::vector<FilamentSlot> &out, wxString &e
         out.emplace_back(std::move(slot));
     }
 
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// v3: websocket print start with options + filament->toolhead map_table
+// ---------------------------------------------------------------------------
+
+bool SnapmakerU1::firmware_supports_print_options(const std::string &firmware_version)
+{
+    // The U1 reports its firmware version as moonraker_version (read from /etc/VERSION).
+    static const std::regex version_regex(R"(^\s*[vV]?(\d+)\.(\d+)(?:\.(\d+))?)");
+    std::smatch match;
+    if (!std::regex_search(firmware_version, match, version_regex))
+        return false;
+    try {
+        const int major = std::stoi(match[1].str());
+        const int minor = std::stoi(match[2].str());
+        const int patch = match[3].matched ? std::stoi(match[3].str()) : 0;
+        return std::make_tuple(major, minor, patch) >= std::make_tuple(1, 3, 0);
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
+void SnapmakerU1::on_server_info(const std::string &moonraker_version) const
+{
+    m_fw_version                = moonraker_version;
+    m_fw_print_options_supported = firmware_supports_print_options(moonraker_version);
+    BOOST_LOG_TRIVIAL(info) << get_name() << ": firmware " << (moonraker_version.empty() ? "<unknown>" : moonraker_version)
+                            << (m_fw_print_options_supported ? " applies print options"
+                                                             : " predates print options, prints start without them");
+}
+
+bool SnapmakerU1::ws_jsonrpc_request(const std::string &method, const std::string &params_json,
+                                     long timeout_seconds, std::string &result_json, std::string &error) const
+{
+#ifndef SNAPMAKER_HAS_CURL_WS
+    (void)method; (void)params_json; (void)timeout_seconds; (void)result_json;
+    error = "libcurl without websocket support";
+    return false;
+#else
+    static std::atomic<int> next_jsonrpc_id{1};
+    const int id = next_jsonrpc_id.fetch_add(1);
+
+    // ws(s)://<effective host>/websocket (Moonraker's JSON-RPC endpoint)
+    std::string ws_url;
+    {
+        const std::string &host = effective_host();
+        std::string scheme = "ws://";
+        std::string rest   = host;
+        if (boost::algorithm::istarts_with(host, "https://")) {
+            scheme = "wss://";
+            rest   = host.substr(8);
+        } else if (boost::algorithm::istarts_with(host, "http://")) {
+            rest = host.substr(7);
+        }
+        while (!rest.empty() && rest.back() == '/')
+            rest.pop_back();
+        ws_url = scheme + rest + "/websocket";
+    }
+
+    nlohmann::json request = {{"jsonrpc", "2.0"}, {"method", method}, {"params", nlohmann::json::parse(params_json)}, {"id", id}};
+    // params_json carries only the params object; the full JSON-RPC envelope is built here.
+    const std::string request_text = request.dump();
+
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        error = "curl_easy_init failed";
+        return false;
+    }
+
+    // One deadline covers connect, handshake, request and the wait for the answer.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+    bool ok = false;
+
+    curl_easy_setopt(curl, CURLOPT_URL, ws_url.c_str());
+    // 2 = websocket ("connect only" + upgrade)
+    curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    if (!m_apikey.empty()) {
+        struct curl_slist *headers = nullptr;
+        headers = curl_slist_append(headers, ("X-Api-Key: " + m_apikey).c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    }
+    if (!m_cafile.empty()) {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, m_cafile.c_str());
+    } else {
+        // LAN printers typically carry self-signed certificates; same policy as
+        // the print-agent implementations this port comes from.
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    }
+
+    CURLcode rc = curl_easy_perform(curl);
+    if (rc != CURLE_OK) {
+        error = std::string("websocket connect: ") + curl_easy_strerror(rc);
+    } else {
+        // Bound blocking recv() so the loop below can enforce the deadline itself.
+        curl_socket_t sockfd = CURL_SOCKET_BAD;
+        curl_easy_getinfo(curl, CURLINFO_ACTIVESOCKET, &sockfd);
+        if (sockfd != CURL_SOCKET_BAD) {
+            struct timeval tv;
+            tv.tv_sec  = 2;
+            tv.tv_usec = 0;
+#ifdef _WIN32
+            setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+#else
+            setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+        }
+
+        size_t sent = 0;
+        rc = curl_ws_send(curl, request_text.data(), request_text.size(), &sent, 0, CURLWS_TEXT);
+        if (rc != CURLE_OK || sent != request_text.size()) {
+            error = std::string("websocket send: ") + curl_easy_strerror(rc);
+        } else {
+            // Moonraker pushes notifications to every connected client, so messages are
+            // skipped until the one answering this request id.
+            std::string acc;
+            bool answered = false;
+            while (!answered) {
+                if (std::chrono::steady_clock::now() > deadline) {
+                    error = "websocket answer timed out (the print may already be starting)";
+                    break;
+                }
+                char buf[16384];
+                size_t rlen = 0;
+                const struct curl_ws_frame *meta = nullptr;
+                rc = curl_ws_recv(curl, buf, sizeof(buf), &rlen, &meta);
+                if (rc == CURLE_AGAIN || rc == CURLE_OPERATION_TIMEDOUT)
+                    continue; // SO_RCVTIMEO tick; re-check the deadline
+                if (rc != CURLE_OK) {
+                    error = std::string("websocket recv: ") + curl_easy_strerror(rc);
+                    break;
+                }
+                if (meta && (meta->flags & CURLWS_CLOSE)) {
+                    error = "websocket closed by the printer before the answer";
+                    break;
+                }
+                acc.append(buf, rlen);
+                // bytesleft > 0: the message continues in further frames.
+                if (meta && meta->bytesleft != 0)
+                    continue;
+
+                const nlohmann::json msg = nlohmann::json::parse(acc, nullptr, false);
+                acc.clear();
+                if (!msg.is_object() || !msg.contains("id") || !msg["id"].is_number_integer() ||
+                    msg["id"].get<int>() != id)
+                    continue; // notification or another request's answer
+
+                answered = true;
+                if (msg.contains("error")) {
+                    const auto &err = msg["error"];
+                    error = err.is_object() && err.contains("message") && err["message"].is_string()
+                                ? err["message"].get<std::string>()
+                                : err.dump();
+                } else {
+                    nlohmann::json result = msg.contains("result") ? msg["result"] : nlohmann::json();
+                    result_json = result.dump();
+                    ok = true;
+                }
+            }
+        }
+    }
+
+    // Best-effort close; a failure here changes nothing about the answer.
+    size_t sent = 0;
+    curl_ws_send(curl, nullptr, 0, &sent, 0, CURLWS_CLOSE);
+    curl_easy_cleanup(curl);
+    return ok;
+#endif
+}
+
+PrintHostPrintStartOptions SnapmakerU1::build_print_start_options(wxString &error) const
+{
+    PrintHostPrintStartOptions options;
+
+    std::vector<FilamentSlot> slots;
+    wxString slot_error;
+    PresetBundle *bundle = GUI::wxGetApp().preset_bundle.get();
+    if (!bundle) {
+        error = _L("No presets loaded");
+        return options;
+    }
+    if (!get_filament_slots(slots, slot_error, bundle, std::string())) {
+        error = _L("Could not fetch filament slots for the toolhead mapping") + ": " + slot_error;
+        return options;
+    }
+
+    // Same model hint as the slot chips in the Physical Printer dialog, so the
+    // matching here reproduces exactly what the user saw.
+    std::string printer_model;
+    if (bundle) {
+        const Preset &printer_preset = bundle->printers.get_edited_preset();
+        if (printer_preset.config.has("printer_model"))
+            printer_model = printer_preset.config.opt_string("printer_model");
+    }
+
+    // For every extruder, the toolhead whose slot matched the same filament preset.
+    // Unmatched extruders are left out (firmware default: extruder i -> toolhead i).
+    for (size_t i = 0; i < bundle->extruders_filaments.size(); ++i) {
+        const std::string preset_name = bundle->extruders_filaments[i].get_selected_preset_name();
+        if (preset_name.empty())
+            continue;
+        const FilamentSlot *match = nullptr;
+        for (const FilamentSlot &slot : slots) {
+            if (!slot.loaded || slot.matched_preset != preset_name)
+                continue;
+            if (!match || slot.tool == static_cast<int>(i))
+                match = &slot; // prefer the identity mapping when several slots match
+        }
+        if (match) {
+            if (match->tool != static_cast<int>(i))
+                BOOST_LOG_TRIVIAL(info) << get_name() << ": extruder " << i << " (" << preset_name
+                                        << ") -> toolhead " << match->tool;
+            options.map_table.emplace_back(static_cast<int>(i), match->tool);
+        }
+    }
+
+    // One slot feeding two extruders is not printable on a toolchanger; the firmware
+    // would silently print both filaments from the same toolhead.
+    for (size_t a = 0; a < options.map_table.size(); ++a)
+        for (size_t b = a + 1; b < options.map_table.size(); ++b)
+            if (options.map_table[a].second == options.map_table[b].second)
+                BOOST_LOG_TRIVIAL(warning) << get_name() << ": extruders " << options.map_table[a].first << " and "
+                                           << options.map_table[b].first << " both map to toolhead "
+                                           << options.map_table[b].second;
+    return options;
+}
+
+bool SnapmakerU1::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, ErrorFn error_fn, InfoFn info_fn) const
+{
+    const char* name = get_name();
+
+    if (upload_data.post_action != PrintHostPostUploadAction::StartPrint)
+        return Moonraker::upload(std::move(upload_data), prorgess_fn, error_fn, info_fn);
+
+    // Connection test first: port auto-probe + firmware version capture
+    // (Moonraker::upload runs it again for its own upload; harmless).
+    wxString test_msg;
+    if (!test(test_msg)) {
+        error_fn(std::move(test_msg));
+        return false;
+    }
+
+#if defined(SNAPMAKER_HAS_CURL_WS)
+    const bool ws_available = true;
+#else
+    const bool ws_available = false;
+#endif
+
+    if (!m_fw_print_options_supported || !ws_available) {
+        const wxString reason = !m_fw_print_options_supported
+            ? _L("Printer firmware predates print start options (1.3.0+ required); starting the print without them.")
+            : _L("This build cannot reach the printer's websocket; starting the print without the options.");
+        BOOST_LOG_TRIVIAL(info) << name << ": " << GUI::into_u8(reason);
+        info_fn(_L("Print start options"), reason);
+        return Moonraker::upload(std::move(upload_data), prorgess_fn, error_fn, info_fn);
+    }
+
+    // Filament -> toolhead mapping from the current per-extruder filament assignment.
+    wxString options_error;
+    PrintHostPrintStartOptions start_options = build_print_start_options(options_error);
+    if (!options_error.empty()) {
+        error_fn(options_error);
+        return false;
+    }
+    // The three switches come from the send dialog.
+    start_options.bed_level      = upload_data.print_start_options.bed_level;
+    start_options.flow_calibrate = upload_data.print_start_options.flow_calibrate;
+    start_options.time_lapse     = upload_data.print_start_options.time_lapse;
+
+    // Upload without the print trigger, then start the print with the options
+    // over the websocket (server.files.start_local_print is websocket-only).
+    PrintHostUpload upload_only = upload_data;
+    upload_only.post_action = PrintHostPostUploadAction::None;
+    if (!Moonraker::upload(std::move(upload_only), prorgess_fn, error_fn, info_fn))
+        return false;
+
+    nlohmann::json options = {
+        {"bed_level",        start_options.bed_level      ? 1 : 0},
+        {"flow_calibrate",   start_options.flow_calibrate ? 1 : 0},
+        {"time_lapse_camera", start_options.time_lapse    ? 1 : 0},
+    };
+    // The firmware turns each option into a parameter of SDCARD_PRINT_FILE_WITH_PARAMETERS
+    // with Python's str(), so a JSON true would arrive as "True" and be rejected by its
+    // get_int(); the switches are sent as 0/1 ints. Without a map_table the firmware
+    // prints each filament with the toolhead of the same number.
+    if (!start_options.map_table.empty()) {
+        nlohmann::json map_table = nlohmann::json::array();
+        for (const auto &pair : start_options.map_table)
+            map_table.push_back({pair.first, pair.second});
+        options["map_table"] = std::move(map_table);
+    }
+    // path is relative to the gcodes root, exactly what the upload posted.
+    nlohmann::json params = {
+        {"path",    upload_data.upload_path.generic_string()},
+        {"options", std::move(options)},
+    };
+    const std::string request_body = params.dump();
+
+    BOOST_LOG_TRIVIAL(info) << boost::format("%1%: server.files.start_local_print params: %2%") % name % request_body;
+
+    info_fn(_L("Print start options"), _L("Starting print..."));
+    std::string result_json, ws_error;
+    // Moonraker answers only after the firmware ran its pre-print checks, hence 60 s.
+    if (!ws_jsonrpc_request("server.files.start_local_print", request_body, 60, result_json, ws_error)) {
+        // Not retried with the plain print trigger: after a timeout the print may
+        // already be starting (same trade-off as the reference implementation).
+        BOOST_LOG_TRIVIAL(error) << name << ": start_local_print failed: " << ws_error;
+        error_fn(_L("Print start failed") + ": " + GUI::from_u8(ws_error));
+        return false;
+    }
+
+    // The firmware reports its own failures (e.g. nozzle mismatch) in the result,
+    // not as a JSON-RPC error.
+    const nlohmann::json result = nlohmann::json::parse(result_json, nullptr, false);
+    const std::string state = result.is_object() && result.contains("state") && result["state"].is_string()
+                                  ? result["state"].get<std::string>() : std::string();
+    if (state != "success") {
+        const std::string message = result.is_object() && result.contains("message") && result["message"].is_string()
+                                        ? result["message"].get<std::string>() : result_json;
+        BOOST_LOG_TRIVIAL(error) << name << ": the printer refused the print: " << message;
+        error_fn(_L("The printer refused the print") + ": " + GUI::from_u8(message));
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << name << ": print started with options";
     return true;
 }
 
