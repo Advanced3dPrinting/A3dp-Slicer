@@ -1,4 +1,5 @@
 min_slic3r_version = 2.7.1
+2.3.1 Aligned bundle version with the shared profiles-repo tag scheme (config_update_github); no preset content change.
 0.0.5 Added BIG-60 and Big-Meter printer models + presets, linked all presets to printer models, A3DP-tuned Meter presets (Klipper).
 0.0.4 Added profiles for 180X IDEX, 180X Single, 120X Single. Changed bed model, textures.
 0.0.3 Adjusted initial wipe tower's brim settings.
