@@ -31,6 +31,7 @@
 #include "PrintHostDialogs.hpp"
 #include "../Utils/ASCIIFolding.hpp"
 #include "../Utils/PrintHost.hpp"
+#include "../Utils/Snapmaker.hpp"
 #include "../Utils/FixModelByWin10.hpp"
 #include "../Utils/UndoRedo.hpp"
 #include "RemovableDriveManager.hpp"
@@ -549,6 +550,9 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
 
     m_optgroup->activate();
 
+    // Filament slots UI needs optgroup->sizer, which only exists after activate().
+    build_filament_slots(m_optgroup);
+
     const auto opt = m_config->option<ConfigOptionEnum<PrintHostType>>("host_type");
     m_last_host_type = opt->value;
     m_opened_as_connect = (m_last_host_type == htPrusaConnect);
@@ -586,6 +590,131 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
     }
 
     update(true);
+}
+
+void PhysicalPrinterDialog::build_filament_slots(ConfigOptionsGroup* optgroup)
+{
+    wxStaticBox* slots_box = new wxStaticBox(this, wxID_ANY, _L("Filament slots (Snapmaker U1 toolheads)"));
+    m_slots_sizer = new wxStaticBoxSizer(slots_box, wxVERTICAL);
+
+    auto* row = new wxBoxSizer(wxHORIZONTAL);
+    m_slots_refresh_btn = new ScalableButton(slots_box, wxID_ANY, "test", _L("Refresh slots"), wxDefaultSize, wxDefaultPosition, wxBU_LEFT | wxBU_EXACTFIT);
+    m_slots_refresh_btn->SetFont(wxGetApp().normal_font());
+    m_slots_refresh_btn->SetToolTip(_L("Read the toolhead filament slots from the printer"));
+    m_slots_info = new wxStaticText(slots_box, wxID_ANY, "");
+    row->Add(m_slots_refresh_btn, 0, wxALIGN_CENTER_VERTICAL);
+    row->Add(m_slots_info, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, BORDER_W);
+    m_slots_sizer->Add(row, 0, wxEXPAND | wxALL, BORDER_W);
+
+    m_slots_chips_sizer = new wxBoxSizer(wxHORIZONTAL);
+    m_slots_sizer->Add(m_slots_chips_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, BORDER_W);
+
+    m_slots_refresh_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { refresh_filament_slots(); });
+
+    optgroup->sizer->Add(m_slots_sizer, 0, wxEXPAND | wxTOP, BORDER_W);
+}
+
+void PhysicalPrinterDialog::refresh_filament_slots()
+{
+    std::unique_ptr<PrintHost> host(PrintHost::get_print_host(m_config));
+    auto* sm_host = dynamic_cast<SnapmakerU1*>(host.get());
+    if (!sm_host) {
+        m_slots_info->SetLabel(_L("Filament slots are available for the Snapmaker U1 host type only."));
+        return;
+    }
+
+    // Connection test first: it performs the 7125/80 port auto-probe and the
+    // slot fetch then reuses the winning port.
+    wxString test_msg;
+    bool test_ok = false;
+    { wxBusyCursor wait; test_ok = sm_host->test(test_msg); }
+    if (!test_ok) {
+        m_slots_info->SetLabel(sm_host->get_test_failed_msg(test_msg));
+        return;
+    }
+
+    std::vector<FilamentSlot> slots;
+    wxString err;
+    bool ok = false;
+    // printer_model lives on the printer preset, not on the physical printer
+    // config (PhysicalPrinter::printer_options() doesn't carry it).
+    std::string printer_model;
+    if (m_config->has("preset_names")) {
+        const ConfigOptionStrings* preset_names = m_config->option<ConfigOptionStrings>("preset_names");
+        if (preset_names && preset_names->size() > 0)
+            if (const Preset* ppreset = wxGetApp().preset_bundle->printers.find_preset(preset_names->get_at(0)))
+                if (ppreset->config.has("printer_model"))
+                    printer_model = ppreset->config.opt_string("printer_model");
+    }
+    { wxBusyCursor wait; ok = sm_host->get_filament_slots(slots, err, wxGetApp().preset_bundle.get(), printer_model); }
+
+    m_slots_chips_sizer->Clear(true);
+    if (!ok) {
+        m_slots_info->SetLabel(_L("Could not fetch filament slots") + ": " + err);
+        this->Layout();
+        return;
+    }
+
+    for (const FilamentSlot& slot : slots) {
+        wxPanel* chip = new wxPanel(m_slots_sizer->GetStaticBox(), wxID_ANY);
+        wxBoxSizer* chip_sizer = new wxBoxSizer(wxVERTICAL);
+        chip->SetSizer(chip_sizer);
+
+        chip_sizer->Add(new wxStaticText(chip, wxID_ANY, wxString::Format(_L("Tool %d"), slot.tool + 1)), 0, wxBOTTOM, 2);
+
+        if (!slot.loaded) {
+            chip_sizer->Add(new wxStaticText(chip, wxID_ANY, _L("Empty")), 0, wxBOTTOM, 2);
+        } else {
+            // Colour swatch from the reported #RRGGBBAA (alpha ignored).
+            wxPanel* swatch = new wxPanel(chip, wxID_ANY, wxDefaultPosition, wxSize(48, 12));
+            std::string col = slot.color;
+            if (!col.empty() && col[0] != '#')
+                col = "#" + col;
+            if (col.size() >= 7)
+                col.resize(7);
+            swatch->SetBackgroundColour(col.size() == 7 ? wxString::FromUTF8(col) : wxColour(128, 128, 128));
+            chip_sizer->Add(swatch, 0, wxEXPAND | wxBOTTOM, 2);
+
+            wxString line = from_u8(slot.type);
+            if (!slot.vendor.empty())
+                line += " - " + from_u8(slot.vendor);
+            chip_sizer->Add(new wxStaticText(chip, wxID_ANY, line), 0, wxBOTTOM, 2);
+
+            if (!slot.matched_preset.empty())
+                chip_sizer->Add(new wxStaticText(chip, wxID_ANY, wxString("-> ") + from_u8(slot.matched_preset)), 0, wxBOTTOM, 2);
+            else
+                chip_sizer->Add(new wxStaticText(chip, wxID_ANY, _L("No matching preset")), 0, wxBOTTOM, 2);
+
+            if (slot.bed_temp > 0 || slot.nozzle_temp_max > 0)
+                chip_sizer->Add(new wxStaticText(chip, wxID_ANY,
+                    wxString::Format(_L("Bed %d / hotend max %d"), slot.bed_temp, slot.nozzle_temp_max)), 0, wxBOTTOM, 2);
+        }
+
+        wxGetApp().UpdateDarkUI(chip);
+        m_slots_chips_sizer->Add(chip, 0, wxEXPAND | wxRIGHT, BORDER_W);
+    }
+
+    m_slots_info->SetLabel(slots.empty() ? _L("No slots reported by the printer") : wxString(""));
+    this->Layout();
+    this->Fit();
+}
+
+void PhysicalPrinterDialog::update_filament_slots_visibility()
+{
+    if (!m_slots_sizer)
+        return;
+    bool show = false;
+    if (Preset::printer_technology(*m_config) == ptFFF) {
+        const auto opt = m_config->option<ConfigOptionEnum<PrintHostType>>("host_type");
+        show = opt && opt->value == htSnapmaker;
+    }
+    m_slots_sizer->ShowItems(show);
+    if (!show && m_slots_chips_sizer) {
+        m_slots_chips_sizer->Clear(true);
+        if (m_slots_info)
+            m_slots_info->SetLabel("");
+    }
+    m_optgroup->sizer->Layout();
 }
 
 void PhysicalPrinterDialog::update_printhost_buttons()
@@ -654,6 +783,9 @@ void PhysicalPrinterDialog::update(bool printer_change)
             m_optgroup->hide_field("printhost_apikey");
             m_optgroup->hide_field("printhost_cafile");
         }
+
+        // Show the filament slot chips only for the Snapmaker U1 host type
+        update_filament_slots_visibility();
 
         // Hide client cert options if disabled
         m_optgroup->show_field("printhost_client_cert", this->m_show_cert_fields);

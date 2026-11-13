@@ -16,6 +16,7 @@
 class wxString;
 class wxStaticText;
 class ScalableButton;
+class wxStaticBoxSizer;
 class wxBoxSizer;
 
 namespace Slic3r {
@@ -78,6 +79,13 @@ class PhysicalPrinterDialog : public DPIDialog
     ScalableButton*     m_printhost_client_cert_browse_btn  {nullptr};
     ScalableButton*     m_printhost_port_browse_btn         {nullptr};
 
+    // Snapmaker U1: per-toolhead filament slot chips (visible only when
+    // host_type == htSnapmaker; populated on demand by refresh_filament_slots()).
+    ScalableButton*     m_slots_refresh_btn                 {nullptr};
+    wxStaticText*       m_slots_info                        {nullptr};
+    wxStaticBoxSizer*   m_slots_sizer                       {nullptr};
+    wxBoxSizer*         m_slots_chips_sizer                 {nullptr};
+
     wxBoxSizer*         m_presets_sizer                 {nullptr};
 
     wxString            m_stored_host;
@@ -85,6 +93,9 @@ class PhysicalPrinterDialog : public DPIDialog
     bool                m_opened_as_connect {false};
 
     void build_printhost_settings(ConfigOptionsGroup* optgroup);
+    void build_filament_slots(ConfigOptionsGroup* optgroup);
+    void refresh_filament_slots();
+    void update_filament_slots_visibility();
     void OnOK(wxEvent& event);
     void AddPreset(wxEvent& event);
 
