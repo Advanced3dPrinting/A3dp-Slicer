@@ -31,6 +31,7 @@
 #include "MPMDv2.hpp"
 #include "MKS.hpp"
 #include "Moonraker.hpp"
+#include "Snapmaker.hpp"
 #include "../GUI/PrintHostDialogs.hpp"
 #include "../GUI/GUI.hpp"
 #include "slic3r/GUI/I18N.hpp"
@@ -84,6 +85,7 @@ PrintHost* PrintHost::get_print_host(DynamicPrintConfig *config)
             case htPrusaConnect: return new PrusaConnect(config);
             case htMKS:       return new MKS(config);
             case htMoonraker: return new Moonraker(config);
+            case htSnapmaker: return new SnapmakerU1(config);
             case htMiniDeltaLCD: return new MiniDeltaLCD(config);
             default:          return nullptr;
         }

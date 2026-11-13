@@ -352,6 +352,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/FixModelByWin10.hpp
     Utils/Moonraker.cpp
     Utils/Moonraker.hpp
+    Utils/Snapmaker.cpp
+    Utils/Snapmaker.hpp
     Utils/OctoPrint.cpp
     Utils/OctoPrint.hpp
     Utils/Klipper.cpp

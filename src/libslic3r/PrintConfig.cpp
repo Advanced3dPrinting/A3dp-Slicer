@@ -141,8 +141,9 @@ static const t_config_enum_values s_keys_map_PrintHostType {
     { "repetier",       htRepetier },
     {"klipper",         htKlipper},
     {"mpmdv2",          htMPMDv2},
-    { "mks",            htMKS },
+    {"mks",             htMKS },
     {"monoprice",       htMiniDeltaLCD },
+    {"snapmaker",       htSnapmaker },
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(PrintHostType)
 
@@ -4461,6 +4462,7 @@ void PrintConfigDef::init_fff_params()
         { "mpmdv2",         "MPMDv2" },
         { "mks",            "MKS" },
         { "monoprice",      "Monoprice lcd" },
+        { "snapmaker",      "Snapmaker U1 (Moonraker)" },
     });
     def->mode = comAdvancedE | comPrusa;
     def->cli = ConfigOptionDef::nocli;

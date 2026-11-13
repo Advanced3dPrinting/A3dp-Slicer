@@ -111,6 +111,7 @@ enum PrintHostType {
     htMPMDv2,
     htMKS,
     htMiniDeltaLCD,
+    htSnapmaker,
 };
 
 enum AuthorizationType {
