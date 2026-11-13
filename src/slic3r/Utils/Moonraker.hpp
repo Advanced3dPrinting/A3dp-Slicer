@@ -52,11 +52,21 @@ protected:
     std::string m_apikey;
     std::string m_cafile;
     bool        m_ssl_revoke_best_effort;
+    // Winning host:port from the port probe (set by test(), used by make_url
+    // for the subsequent upload). mutable: test() is const.
+    mutable std::string m_host_probed;
 
     virtual void set_auth(Http &http) const;
     std::string make_url(const std::string &path) const;
+    // Host actually used for requests: equals m_host, unless the port probe in
+    // test() found Moonraker on a different port (stock Snapmaker U1 firmware
+    // exposes Moonraker on 7125 or 80; both are probed when no explicit port
+    // is configured).
+    std::string effective_host() const;
 
 private:
+    bool do_test(const std::string &url, wxString &msg) const;
+
 /*
 #ifdef WIN32
     bool test_with_resolved_ip(wxString& curl_msg) const;

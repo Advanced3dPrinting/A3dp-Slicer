@@ -67,6 +67,19 @@ std::string substitute_host(const std::string& orig_addr, std::string sub_addr)
     return out;
 }
 #endif
+
+// True if the host string carries an explicit port ("scheme://host:port" or "host:port").
+bool has_explicit_port(const std::string &host)
+{
+    std::string rest = host;
+    const auto scheme = rest.find("://");
+    if (scheme != std::string::npos)
+        rest = rest.substr(scheme + 3);
+    const auto slash = rest.find('/');
+    if (slash != std::string::npos)
+        rest = rest.substr(0, slash);
+    return rest.find(':') != std::string::npos;
+}
 }
 Moonraker::Moonraker(DynamicPrintConfig *config) :
     m_host(config->opt_string("print_host")),
@@ -89,7 +102,7 @@ wxString Moonraker::get_test_failed_msg (wxString &msg) const
         , msg);
 }
 
-bool Moonraker::test(wxString& msg) const
+bool Moonraker::do_test(const std::string &url, wxString& msg) const
 {
     // GET /server/info
 
@@ -98,7 +111,6 @@ bool Moonraker::test(wxString& msg) const
     const char* name = get_name();
 
     bool res = true;
-    auto url = make_url("server/info");
 
     BOOST_LOG_TRIVIAL(info) << boost::format("%1%: Get version at: %2%") % name % url;
 
@@ -145,6 +157,31 @@ bool Moonraker::test(wxString& msg) const
     .perform_sync();
 
     return res;
+}
+
+bool Moonraker::test(wxString& msg) const
+{
+    if (do_test(make_url("server/info"), msg))
+        return true;
+    if (has_explicit_port(m_host))
+        return false;
+
+    // Port auto-probe: the stock Snapmaker U1 firmware is reported to expose
+    // Moonraker on either 7125 (Moonraker default) or 80 (behind the web UI);
+    // community sources conflict, so both are tried when the configured host
+    // carries no explicit port. The winning port is remembered for the upload.
+    const char* name = get_name();
+    static const char* ports[] = { "7125", "80" };
+    for (const char* port : ports) {
+        m_host_probed = m_host + ":" + port;
+        const auto url = make_url("server/info");
+        BOOST_LOG_TRIVIAL(info) << boost::format("%1%: Port auto-probe: trying %2%") % name % url;
+        if (do_test(url, msg))
+            return true;
+    }
+    m_host_probed.clear();
+    msg += "\n" + GUI::from_u8(_u8L("Port auto-probe tried ports 7125 and 80."));
+    return false;
 }
 
 bool Moonraker::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, ErrorFn error_fn, InfoFn info_fn) const
@@ -245,16 +282,22 @@ void Moonraker::set_auth(Http &http) const
         http.ca_file(m_cafile);
 }
 
+std::string Moonraker::effective_host() const
+{
+    return m_host_probed.empty() ? m_host : m_host_probed;
+}
+
 std::string Moonraker::make_url(const std::string &path) const
 {
-    if (m_host.find("http://") == 0 || m_host.find("https://") == 0) {
-        if (m_host.back() == '/') {
-            return (boost::format("%1%%2%") % m_host % path).str();
+    const std::string &host = m_host_probed.empty() ? m_host : m_host_probed;
+    if (host.find("http://") == 0 || host.find("https://") == 0) {
+        if (host.back() == '/') {
+            return (boost::format("%1%%2%") % host % path).str();
         } else {
-            return (boost::format("%1%/%2%") % m_host % path).str();
+            return (boost::format("%1%/%2%") % host % path).str();
         }
     } else {
-        return (boost::format("http://%1%/%2%") % m_host % path).str();
+        return (boost::format("http://%1%/%2%") % host % path).str();
     }
 }
 

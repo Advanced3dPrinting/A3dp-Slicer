@@ -1725,6 +1725,17 @@ void GCodeGenerator::_do_export(Print& print_mod, GCodeOutputStream &file, Thumb
     this->placeholder_parser().set("initial_tool", initial_extruder_id);
     this->placeholder_parser().set("initial_extruder", initial_extruder_id);
     this->placeholder_parser().set("current_extruder", initial_extruder_id);
+    // Orca-compatible placeholder for toolchanger machines (Snapmaker U1 etc.):
+    // is_extruder_used[e] is true if extruder e is used anywhere in the print,
+    // so the start G-code can pre-heat only the tools that will actually print.
+    {
+        std::vector<unsigned char> extruder_used(m_writer.extruders().size(), 0);
+        for (const LayerTools &layer_tools : tool_ordering.layer_tools())
+            for (uint16_t extruder_id : layer_tools.extruders)
+                if (extruder_id < extruder_used.size())
+                    extruder_used[extruder_id] = 1;
+        this->placeholder_parser().set("is_extruder_used", new ConfigOptionBools(std::move(extruder_used)));
+    }
     //Set variable for total layer count so it can be used in custom gcode.
     this->placeholder_parser().set("total_layer_count", object_layer_count());
     this->placeholder_parser().set("all_layer_count", layer_count());
