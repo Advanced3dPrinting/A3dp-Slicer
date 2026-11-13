@@ -44,7 +44,7 @@ namespace Slic3r {
 
 static const std::string VENDOR_PREFIX = "vendor:";
 static const std::string MODEL_PREFIX = "model:";
-static const std::string VERSION_CHECK_URL = "https://api.github.com/repos/" "supermerill/superslicer" "/releases";
+static const std::string VERSION_CHECK_URL = "https://api.github.com/repos/" "Advanced3dPrinting/A3dp-Slicer" "/releases";
 // Url to index archive zip that contains latest indicies
 static const std::string INDEX_ARCHIVE_URL= "https://api.github.com/repos/" SLIC3R_GITHUB "-profiles/releases";
 //to get the slic3r idx: look at the json from INDEX_ARCHIVE_URL, and request the assets_url

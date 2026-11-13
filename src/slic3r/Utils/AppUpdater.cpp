@@ -11,6 +11,7 @@
 #include <string>
 
 #include <boost/filesystem.hpp>
+#include <boost/algorithm/string.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/nowide/fstream.hpp>
 #include <boost/nowide/convert.hpp>
@@ -855,21 +856,24 @@ void AppUpdater::sync_download()
             boost::property_tree::read_json(json_stream, root);
             for (auto json_asset : root) {
                 std::string name = json_asset.second.get<std::string>("name");
+                // Match case-insensitively: our release assets are e.g.
+                // A3dp-Slicer_2.7.62.0.msi, A3dp-Slicer-macOS-arm.dmg, A3dp-Slicer-linux-x64-GTK3.AppImage
+                std::string name_lower = boost::algorithm::to_lower_copy(name);
 #ifdef _WIN32
                 //windows
-                if (name.find("win") != std::string::npos && 
-                    (input_data.replace_current ? name.find("zip") != std::string::npos : name.find("msi") != std::string::npos))
+                if (input_data.replace_current ?
+                        (name_lower.find("win") != std::string::npos && name_lower.find("zip") != std::string::npos) :
+                        name_lower.find("msi") != std::string::npos)
 #elif __APPLE__
                 //macos
-#if defined(__arm__) || defined(_M_ARM)
-                if (name.find("macos") != std::string::npos && name.find("arm") != std::string::npos && name.find("dmg") != std::string::npos)
+#if defined(__arm__) || defined(__arm64__) || defined(__aarch64__) || defined(_M_ARM)
+                if (name_lower.find("macos") != std::string::npos && name_lower.find("arm") != std::string::npos && name_lower.find("dmg") != std::string::npos)
 #else
-                if (name.find("macos") != std::string::npos && name.find("arm") == std::string::npos && name.find("dmg") != std::string::npos)
+                if (name_lower.find("macos") != std::string::npos && name_lower.find("arm") == std::string::npos && name_lower.find("dmg") != std::string::npos)
 #endif
 #else
                 //linux
-                if (name.find("ubuntu") != std::string::npos ||
-                    name.find("linux") != std::string::npos && name.find("appimage") != std::string::npos)
+                if (name_lower.find("appimage") != std::string::npos)
 #endif
                 {
                     input_data.url = json_asset.second.get<std::string>("browser_download_url");
