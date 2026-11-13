@@ -567,14 +567,14 @@ bool VendorSync::parse_tags(const std::string &json) {
     for (auto json_version : root) {
         const std::string tag = json_version.second.get<std::string>("name");
         size_t equal_pos = tag.find('=');
-        assert(equal_pos != std::string::npos);
-        if (equal_pos == std::string::npos) {
+        if (equal_pos == std::string::npos || equal_pos == 0 || equal_pos + 1 >= tag.size()) {
+            BOOST_LOG_TRIVIAL(warning) << "VendorSync::parse_tags: skipping release tag not in <config_version>=<slicer_version> format: " << tag;
             continue;
         }
         std::optional<Semver> config_version = Semver::parse(tag.substr(0, equal_pos));
         std::optional<Semver> slicer_version = Semver::parse(tag.substr(equal_pos+1));
         if (!config_version || !slicer_version) {
-            assert(false);
+            BOOST_LOG_TRIVIAL(warning) << "VendorSync::parse_tags: skipping release tag that does not parse as semver: " << tag;
             continue;
         }
         // check if slicer_version is okay
@@ -582,7 +582,11 @@ bool VendorSync::parse_tags(const std::string &json) {
         std::string str_curr_ver = SLIC3R_VERSION_FULL;
         //if (slicer_version > *Semver::parse(SLIC3R_VERSION_FULL) || versions_here.find(config_version->to_string()) != versions_here.end()) {
         bool already_here = false;
-        const boost::property_tree::ptree& commit_node = json_version.second.get_child("commit");
+        boost::optional<boost::property_tree::ptree&> commit_node = json_version.second.get_child_optional("commit");
+        if (!commit_node) {
+            BOOST_LOG_TRIVIAL(warning) << "VendorSync::parse_tags: skipping release tag without commit info: " << tag;
+            continue;
+        }
         if(versions_here.find(tag) != versions_here.end()) {
             assert(versions_here[tag] < available_profiles.size());
             //update the tag infos if not present
@@ -591,8 +595,8 @@ bool VendorSync::parse_tags(const std::string &json) {
             if (to_update.tag.empty() || to_update.url_zip.empty()) {
                 to_update.tag = tag;
                 to_update.url_zip = json_version.second.get<std::string>("zipball_url");
-                to_update.commit_sha = commit_node.get<std::string>("sha");
-                to_update.commit_url = commit_node.get<std::string>("url");
+                to_update.commit_sha = commit_node->get<std::string>("sha");
+                to_update.commit_url = commit_node->get<std::string>("url");
             }
         } else {
             // okay, add it
@@ -600,8 +604,8 @@ bool VendorSync::parse_tags(const std::string &json) {
             available_profiles.emplace_back(VendorAvailable{*config_version, *slicer_version,
                                                             /*local_file=*/std::string(),
                                                             json_version.second.get<std::string>("zipball_url"),
-                                                            commit_node.get<std::string>("sha"),
-                                                            commit_node.get<std::string>("url"), tag, std::string()});
+                                                            commit_node->get<std::string>("sha"),
+                                                            commit_node->get<std::string>("url"), tag, std::string()});
         }
     }
 
@@ -614,6 +618,10 @@ bool VendorSync::parse_tags(const std::string &json) {
 }
 
 void VendorSync::sort_available() {
+    // `best` points into available_profiles; drop any stale pointer left over from
+    // a previous call, as this vector may have reallocated since (use-after-free
+    // when dereferenced below). It is recomputed at the end of this function.
+    best = nullptr;
     if (available_profiles.empty()) {
         return;
     }
