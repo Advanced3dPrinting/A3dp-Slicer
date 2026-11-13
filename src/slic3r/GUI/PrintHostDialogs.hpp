@@ -33,11 +33,21 @@ namespace GUI {
 class PrintHostSendDialog : public GUI::MsgDialog
 {
 public:
-    PrintHostSendDialog(const boost::filesystem::path &path, PrintHostPostUploadActions post_actions, const wxArrayString& groups, const wxArrayString& storage_paths, const wxArrayString& storage_names);
+    PrintHostSendDialog(const boost::filesystem::path &path, PrintHostPostUploadActions post_actions, const wxArrayString& groups, const wxArrayString& storage_paths, const wxArrayString& storage_names, const PrintHost *printhost = nullptr);
     boost::filesystem::path filename() const;
     PrintHostPostUploadAction post_action() const;
     std::string group() const;
     std::string storage() const;
+    // Print-start options collected for hosts that support them (Snapmaker U1).
+    // shown = the options section was displayed for this host.
+    struct PrintStartUiOptions
+    {
+        bool shown          = false;
+        bool bed_level      = false;
+        bool flow_calibrate = false;
+        bool time_lapse     = false;
+    };
+    PrintStartUiOptions print_start_options() const;
 
     virtual void EndModal(int ret) override;
 private:
@@ -48,6 +58,9 @@ private:
     wxString    m_valid_suffix;
     wxString    m_preselected_storage;
     wxArrayString m_paths;
+    wxCheckBox *m_chk_bed_level      = nullptr;
+    wxCheckBox *m_chk_flow_calibrate = nullptr;
+    wxCheckBox *m_chk_time_lapse     = nullptr;
 };
 
 

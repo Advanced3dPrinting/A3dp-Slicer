@@ -87,7 +87,8 @@ private:
     // Fetches the filament slots and maps each extruder's selected filament
     // preset to the toolhead whose slot matched the same preset. Unmatched
     // extruders are left out (firmware default: extruder i -> toolhead i).
-    PrintHostPrintStartOptions build_print_start_options(wxString &error) const;
+    // bundle must not be null.
+    PrintHostPrintStartOptions build_print_start_options(PresetBundle *bundle, wxString &error) const;
 
     // mutable: test() and upload() are const, but the captured firmware state
     // is per-instance connection state (single-threaded upload path).

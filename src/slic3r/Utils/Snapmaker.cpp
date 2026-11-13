@@ -669,13 +669,12 @@ bool SnapmakerU1::ws_jsonrpc_request(const std::string &method, const std::strin
 #endif
 }
 
-PrintHostPrintStartOptions SnapmakerU1::build_print_start_options(wxString &error) const
+PrintHostPrintStartOptions SnapmakerU1::build_print_start_options(PresetBundle *bundle, wxString &error) const
 {
     PrintHostPrintStartOptions options;
 
     std::vector<FilamentSlot> slots;
     wxString slot_error;
-    PresetBundle *bundle = GUI::wxGetApp().preset_bundle.get();
     if (!bundle) {
         error = _L("No presets loaded");
         return options;
@@ -758,7 +757,7 @@ bool SnapmakerU1::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, Er
 
     // Filament -> toolhead mapping from the current per-extruder filament assignment.
     wxString options_error;
-    PrintHostPrintStartOptions start_options = build_print_start_options(options_error);
+    PrintHostPrintStartOptions start_options = build_print_start_options(GUI::wxGetApp().preset_bundle.get(), options_error);
     if (!options_error.empty()) {
         error_fn(options_error);
         return false;

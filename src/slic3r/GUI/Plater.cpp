@@ -9142,6 +9142,14 @@ void Plater::send_gcode()
         upload_job.upload_data.post_action = dlg.post_action();
         upload_job.upload_data.group       = dlg.group();
         upload_job.upload_data.storage     = dlg.storage();
+        {
+            const PrintHostSendDialog::PrintStartUiOptions ui_options = dlg.print_start_options();
+            if (ui_options.shown && upload_job.upload_data.post_action == PrintHostPostUploadAction::StartPrint) {
+                upload_job.upload_data.print_start_options.bed_level      = ui_options.bed_level;
+                upload_job.upload_data.print_start_options.flow_calibrate = ui_options.flow_calibrate;
+                upload_job.upload_data.print_start_options.time_lapse     = ui_options.time_lapse;
+            }
+        }
 
         // Show "Is printer clean" dialog for PrusaConnect - Upload and print.
         if (std::string(upload_job.printhost->get_name()) == "PrusaConnect" && upload_job.upload_data.post_action == PrintHostPostUploadAction::StartPrint) {

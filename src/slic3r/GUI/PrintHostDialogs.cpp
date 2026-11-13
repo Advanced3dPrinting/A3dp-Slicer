@@ -33,6 +33,7 @@
 #include "NotificationManager.hpp"
 #include "ExtraRenderers.hpp"
 #include "format.hpp"
+#include "../Utils/Snapmaker.hpp"
 
 namespace fs = boost::filesystem;
 
@@ -43,7 +44,7 @@ static const char *CONFIG_KEY_PATH  = "printhost_path";
 static const char *CONFIG_KEY_GROUP = "printhost_group";
 static const char* CONFIG_KEY_STORAGE = "printhost_storage";
 
-PrintHostSendDialog::PrintHostSendDialog(const fs::path &path, PrintHostPostUploadActions post_actions, const wxArrayString &groups, const wxArrayString& storage_paths, const wxArrayString& storage_names)
+PrintHostSendDialog::PrintHostSendDialog(const fs::path &path, PrintHostPostUploadActions post_actions, const wxArrayString &groups, const wxArrayString& storage_paths, const wxArrayString& storage_names, const PrintHost *printhost)
     : MsgDialog(static_cast<wxWindow*>(wxGetApp().mainframe), _L("Send G-Code to printer host"), _L("Upload to Printer Host with the following filename:"), 0) // Set style = 0 to avoid default creation of the "OK" button. 
                                                                                                                                                                // All buttons will be added later in this constructor 
     , txt_filename(new wxTextCtrl(this, wxID_ANY))
@@ -114,6 +115,22 @@ PrintHostSendDialog::PrintHostSendDialog(const fs::path &path, PrintHostPostUplo
         }
         return true;
     };
+
+    // Snapmaker U1: print-start options applied by the websocket start request
+    // (server.files.start_local_print). The checkboxes only matter for the
+    // "Upload and Print" action; "Upload" ignores them.
+    if (printhost && post_actions.has(PrintHostPostUploadAction::StartPrint) &&
+        dynamic_cast<const SnapmakerU1 *>(printhost) != nullptr) {
+        auto *options_box = new wxStaticBoxSizer(wxVERTICAL, this, _L("Print start options (Snapmaker U1)"));
+        m_chk_bed_level      = new wxCheckBox(this, wxID_ANY, _L("Bed leveling before print"));
+        m_chk_flow_calibrate = new wxCheckBox(this, wxID_ANY, _L("Flow calibration before print"));
+        m_chk_time_lapse     = new wxCheckBox(this, wxID_ANY, _L("Record timelapse"));
+        options_box->Add(m_chk_bed_level, 0, wxBOTTOM, 2 * VERT_SPACING);
+        options_box->Add(m_chk_flow_calibrate, 0, wxBOTTOM, 2 * VERT_SPACING);
+        options_box->Add(m_chk_time_lapse, 0);
+        content_sizer->AddSpacer(VERT_SPACING);
+        content_sizer->Add(options_box, 0, wxEXPAND);
+    }
 
     auto* btn_ok = add_button(wxID_OK, true, _L("Upload"));
     btn_ok->Bind(wxEVT_BUTTON, [this, validate_path](wxCommandEvent&) {
@@ -187,6 +204,16 @@ fs::path PrintHostSendDialog::filename() const
 PrintHostPostUploadAction PrintHostSendDialog::post_action() const
 {
     return post_upload_action;
+}
+
+PrintHostSendDialog::PrintStartUiOptions PrintHostSendDialog::print_start_options() const
+{
+    PrintStartUiOptions out;
+    out.shown          = m_chk_bed_level != nullptr;
+    out.bed_level      = m_chk_bed_level      && m_chk_bed_level->GetValue();
+    out.flow_calibrate = m_chk_flow_calibrate && m_chk_flow_calibrate->GetValue();
+    out.time_lapse     = m_chk_time_lapse     && m_chk_time_lapse->GetValue();
+    return out;
 }
 
 std::string PrintHostSendDialog::group() const
