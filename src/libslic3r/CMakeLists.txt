@@ -635,6 +635,12 @@ endif ()
 
 if (TARGET OpenVDB::openvdb)
     target_link_libraries(libslic3r OpenVDB::openvdb)
+    # OpenVDBUtils.cpp references Imath symbols (imath_half_to_float_table) that a
+    # system libopenvdb no longer exports through its own dependency chain.
+    find_library(IMATH_LIBRARY NAMES Imath Imath-3_2)
+    if (IMATH_LIBRARY)
+        target_link_libraries(libslic3r ${IMATH_LIBRARY})
+    endif ()
 endif()
 
 if(WIN32)
