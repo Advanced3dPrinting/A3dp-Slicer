@@ -725,6 +725,11 @@ PrintHostPrintStartOptions SnapmakerU1::build_print_start_options(PresetBundle *
     return options;
 }
 
+PresetBundle *SnapmakerU1::get_print_preset_bundle() const
+{
+    return GUI::wxGetApp().preset_bundle.get();
+}
+
 bool SnapmakerU1::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, ErrorFn error_fn, InfoFn info_fn) const
 {
     const char* name = get_name();
@@ -757,7 +762,7 @@ bool SnapmakerU1::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, Er
 
     // Filament -> toolhead mapping from the current per-extruder filament assignment.
     wxString options_error;
-    PrintHostPrintStartOptions start_options = build_print_start_options(GUI::wxGetApp().preset_bundle.get(), options_error);
+    PrintHostPrintStartOptions start_options = build_print_start_options(get_print_preset_bundle(), options_error);
     if (!options_error.empty()) {
         error_fn(options_error);
         return false;

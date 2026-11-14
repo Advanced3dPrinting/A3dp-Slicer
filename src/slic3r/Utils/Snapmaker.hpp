@@ -90,6 +90,10 @@ private:
     // bundle must not be null.
     PrintHostPrintStartOptions build_print_start_options(PresetBundle *bundle, wxString &error) const;
 
+    // Bundle whose per-extruder filament assignment feeds the map_table.
+    // Virtual so tests can inject a bundle without a running wx app.
+    virtual PresetBundle* get_print_preset_bundle() const;
+
     // mutable: test() and upload() are const, but the captured firmware state
     // is per-instance connection state (single-threaded upload path).
     mutable std::string m_fw_version;
