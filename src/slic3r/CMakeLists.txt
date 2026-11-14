@@ -440,6 +440,13 @@ encoding_check(libslic3r_gui)
 
 target_link_libraries(libslic3r_gui libslic3r avrdude libcereal imgui imguizmo GLEW::GLEW OpenGL::GL hidapi exif angelscript libcurl ${wxWidgets_LIBRARIES} NanoSVG::nanosvg NanoSVG::nanosvgrast)
 
+# A3DPWebView.cpp calls the webkit2gtk C API directly; Ubuntu resolves it
+# transitively through wx, Arch needs it named explicitly.
+find_library(A3DP_WEBKIT_LIB NAMES webkit2gtk-4.1)
+if (A3DP_WEBKIT_LIB)
+    target_link_libraries(libslic3r_gui ${A3DP_WEBKIT_LIB})
+endif ()
+
 if (MSVC)
     target_link_libraries(libslic3r_gui Setupapi.lib)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")

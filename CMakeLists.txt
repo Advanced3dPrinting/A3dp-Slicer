@@ -485,7 +485,11 @@ include_directories(BEFORE SYSTEM ${EIGEN3_INCLUDE_DIR})
 # no matter what.
 find_package(EXPAT REQUIRED)
 
+# expat's own CMake package config (2.8.4+) may already define an unnamespaced
+# "libexpat" target; don't redefine it.
+if (NOT TARGET libexpat)
 add_library(libexpat INTERFACE)
+endif ()
 
 if (TARGET EXPAT::EXPAT )
     target_link_libraries(libexpat INTERFACE EXPAT::EXPAT)
