@@ -679,22 +679,29 @@ PrintHostPrintStartOptions SnapmakerU1::build_print_start_options(PresetBundle *
         error = _L("No presets loaded");
         return options;
     }
-    if (!get_filament_slots(slots, slot_error, bundle, std::string())) {
+    // Same model hint as the slot chips in the Physical Printer dialog, so the
+    // matching here reproduces exactly what the user saw.
+    std::string printer_model;
+    const Preset &printer_preset = bundle->printers.get_edited_preset();
+    if (printer_preset.config.has("printer_model"))
+        printer_model = printer_preset.config.opt_string("printer_model");
+
+    if (!get_filament_slots(slots, slot_error, bundle, printer_model)) {
         error = _L("Could not fetch filament slots for the toolhead mapping") + ": " + slot_error;
         return options;
     }
 
-    // Same model hint as the slot chips in the Physical Printer dialog, so the
-    // matching here reproduces exactly what the user saw.
-    std::string printer_model;
-    if (bundle) {
-        const Preset &printer_preset = bundle->printers.get_edited_preset();
-        if (printer_preset.config.has("printer_model"))
-            printer_model = printer_preset.config.opt_string("printer_model");
-    }
-
     // For every extruder, the toolhead whose slot matched the same filament preset.
     // Unmatched extruders are left out (firmware default: extruder i -> toolhead i).
+    BOOST_LOG_TRIVIAL(info) << get_name() << ": map_table build: printer_model '" << printer_model
+                            << "', " << slots.size() << " slots, "
+                            << bundle->extruders_filaments.size() << " extruders";
+    for (const FilamentSlot &slot : slots)
+        BOOST_LOG_TRIVIAL(info) << get_name() << ": map_table build: slot " << slot.tool
+                                << " loaded=" << slot.loaded << " matched='" << slot.matched_preset << "'";
+    for (size_t i = 0; i < bundle->extruders_filaments.size(); ++i)
+        BOOST_LOG_TRIVIAL(info) << get_name() << ": map_table build: extruder " << i
+                                << " preset='" << bundle->extruders_filaments[i].get_selected_preset_name() << "'";
     for (size_t i = 0; i < bundle->extruders_filaments.size(); ++i) {
         const std::string preset_name = bundle->extruders_filaments[i].get_selected_preset_name();
         if (preset_name.empty())
