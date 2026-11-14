@@ -9120,7 +9120,7 @@ void Plater::send_gcode()
         }
     }
 
-    PrintHostSendDialog dlg(default_output_file, upload_job.printhost->get_post_upload_actions(), groups, storage_paths, storage_names);
+    PrintHostSendDialog dlg(default_output_file, upload_job.printhost->get_post_upload_actions(), groups, storage_paths, storage_names, upload_job.printhost.get());
     if (dlg.ShowModal() == wxID_OK) {
 
         if (printer_technology() == ptFFF) {
