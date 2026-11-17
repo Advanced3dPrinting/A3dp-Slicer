@@ -28,7 +28,8 @@ add_cmake_project(wxWidgets
     # additionally uses soup2-only transport status codes (removed in libsoup3)
     # - guarded by webview_webkit2_soup3_compat.patch.
     PATCH_COMMAND /bin/sh -c
-        "sed -i 's/WEBKIT2_VERSION 4\\.0/WEBKIT2_VERSION 4.1/' build/cmake/modules/FindWEBKIT2.cmake && sed -i 's/soup-2\\.4/soup-3.0/g' build/cmake/modules/FindLIBSOUP.cmake && ${PATCH_CMD} ${CMAKE_CURRENT_LIST_DIR}/webview_webkit2_soup3_compat.patch"
+        "sed -i 's/WEBKIT2_VERSION 4\\.0/WEBKIT2_VERSION 4.1/' build/cmake/modules/FindWEBKIT2.cmake && sed -i 's/soup-2\\.4/soup-3.0/g' build/cmake/modules/FindLIBSOUP.cmake"
+    COMMAND ${PATCH_CMD} ${CMAKE_CURRENT_LIST_DIR}/webview_webkit2_soup3_compat.patch
     CMAKE_ARGS
         "-DCMAKE_DEBUG_POSTFIX:STRING="
         -DwxBUILD_PRECOMP=ON
