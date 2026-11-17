@@ -35,7 +35,7 @@ jobs:
       id: cache-action
       uses: actions/cache@v3
       with:
-        key: ubu_gtk3_2.7
+        key: ubu_gtk3_wx41_2.7
         path: deps/build/destdir
     - if: steps.cache-action.outputs.cache-hit != 'true'
       name: build deps if new cache

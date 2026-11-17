@@ -21,6 +21,12 @@ endif()
 add_cmake_project(wxWidgets
     URL https://github.com/prusa3d/wxWidgets/archive/78aa2dc0ea7ce99dc19adc1140f74c3e2e3f3a26.zip
     URL_HASH SHA256=94b7d972373503e380e5a8b0ca63b1ccb956da4006402298dd89a0c5c7041b1e
+    # The pinned fork's find modules hardcode webkit2gtk-4.0 (libsoup2), which
+    # is EOL and absent from modern distros (Ubuntu 22.10+/Debian 12/Arch).
+    # Retarget them to webkit2gtk-4.1 (libsoup3) - the webkit2 C API and the
+    # include tree layout (webkitgtk-4.1) are identical.
+    PATCH_COMMAND /bin/sh -c
+        "sed -i 's/WEBKIT2_VERSION 4\\.0/WEBKIT2_VERSION 4.1/' build/cmake/modules/FindWEBKIT2.cmake && sed -i 's/soup-2\\.4/soup-3.0/g' build/cmake/modules/FindLIBSOUP.cmake"
     CMAKE_ARGS
         "-DCMAKE_DEBUG_POSTFIX:STRING="
         -DwxBUILD_PRECOMP=ON

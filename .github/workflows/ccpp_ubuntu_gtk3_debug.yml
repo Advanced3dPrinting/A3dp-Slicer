@@ -26,11 +26,13 @@ jobs:
       run: sudo apt install libgtk-3-dev
     - name: install libs
       run: sudo ./BuildLinux.sh -u
+    - name: Install patchelf
+      run: sudo apt install -y patchelf
     - name: dep cache
       id: cache-action
       uses: actions/cache@v3
       with:
-        key: ubu_gtk3_debug_2.7
+        key: ubu_gtk3_debug_wx41_2.7
         path: deps/build/destdir
     - if: steps.cache-action.outputs.cache-hit != 'true'
       name: build deps if new cache
