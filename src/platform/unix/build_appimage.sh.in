@@ -2,7 +2,7 @@
 set -e
 
 #
-# This script build the SuperSlicer appimage.
+# This script builds the A3dp-Slicer appimage.
 #
 # Original script from SuperSlicer by supermerill https://github.com/supermerill/SuperSlicer
 #
@@ -12,12 +12,31 @@ set -e
 #
 # 14 Jul 2026, added set -e for error detection; updated appimagetool URL
 # 24 Jul 2026, added library bundling with patchelf for self-contained AppImage
+# 16 Nov 2026, bundling rewrite: (a) wholesale copy of the built deps tree,
+#              (b) tolerant transitive ldd closure for system libs (errors are
+#              logged, never swallowed; unresolved libs abort with a clear
+#              error), DT_RPATH via patchelf, and a hard self-contained
+#              verification gate (no "not found" allowed in the final trace).
+#              Root cause of the "0 libraries bundled" bug: the old closure
+#              grabbed ldd field $2 (the "=>" token) instead of $3 (the path),
+#              so nothing was ever copied - on any host, incl. CI.
+# 16 Nov 2026 (2), webview bootstrapping for foreign distros: bundle the
+#              WebKitGTK helper executables + injected bundle and rewrite the
+#              baked PKGLIBEXECDIR string inside libwebkit2gtk to a
+#              CWD-relative path (release WebKit has no helper-path env
+#              override; WEBKIT_EXEC_PATH is developer-mode only). Bundle
+#              glib-networking's GIO TLS module (dlopened, invisible to ldd).
+#              NEVER bundle the GL/EGL/Vulkan/GBM/DRM/Wayland stack: the
+#              build host's Mesa cannot find its DRI drivers elsewhere and
+#              WebKit's glGetString(GL_VENDOR) then returns garbage (SEGV).
+#              Launcher wrappers (AppRun + tgz) cd into the AppDir, disable
+#              the webkit sandbox and point GIO_MODULE_DIR /
+#              WEBKIT_INJECTED_BUNDLE_PATH at the bundled copies.
 
-
-#old fuse2 tool APPIMAGETOOLURL="https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
 APPIMAGETOOLURL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
 
 APP_IMAGE="@SLIC3R_APP_KEY@_ubu64.AppImage"
+CMD="@SLIC3R_APP_CMD@"
 
 wget --no-check-certificate -q "${APPIMAGETOOLURL}" -O ../appimagetool.AppImage || {
     echo "ERROR: Failed to download appimagetool from ${APPIMAGETOOLURL}"
@@ -26,91 +45,258 @@ wget --no-check-certificate -q "${APPIMAGETOOLURL}" -O ../appimagetool.AppImage 
 chmod +x ../appimagetool.AppImage
 
 # ---------------------------------------------------------------------------
-# Bundle all dynamic libraries into the AppImage for self-contained execution
+# Bundle all dynamic libraries into the AppDir for self-contained execution.
+#
+# The AppDir is the current directory (build/package): bin/ + resources/ and,
+# after bundling, usr/lib/ holding every non-glibc shared library that the
+# slicer and OCCTWrapper.so (transitively) need. glibc core is never bundled:
+# every supported distro ships a compatible one and bundling it breaks nss.
 # ---------------------------------------------------------------------------
 echo "=== Bundling dynamic libraries ==="
-mkdir -p usr/lib
+LIB_DIR="$PWD/usr/lib"
+mkdir -p "$LIB_DIR"
 
-# Collect all .so paths needed by a binary/library into a flat list.
-# Uses an iterative breadth-first approach to avoid subshell issues.
-BUNDLED_LIST=""
+# glibc core: the loader resolves these from the host, always present.
+# GL/EGL/Vulkan/GBM/DRM are NEVER bundled: the build host's Mesa cannot find
+# its DRI drivers on other distros (WebKit's glGetString(GL_VENDOR) returned
+# garbage -> SEGV in WebKit init on Arch) and GL must match the host kernel
+# driver (NVIDIA). Every desktop distro ships them; the host copy wins.
+# Wayland IS bundled (unlike GL): needed at load time even for X11 builds,
+# ABI-stable, and no driver coupling.
+SKIP_LIBS=" ld-linux-x86-64.so.2 libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0 librt.so.1 libresolv.so.2 libutil.so.1 libGL.so.1 libGLX.so.0 libGLdispatch.so.0 libEGL.so.1 libGLESv2.so.2 libgbm.so.1 libdrm.so.2 libdrm_intel.so.1 libdrm_amdgpu.so.1 libdrm_radeon.so.1 libdrm_nouveau.so.2 libdrm_etnaviv.so.1 libglapi.so.0 libOSMesa.so.8 libvulkan.so.1 "
 
-bundle_deps() {
+# Trace an ELF and print its ldd-style dependency lines to stdout.
+# Tolerant: never swallow errors silently. Tries ldd first, then asks the
+# dynamic loader directly (some environments ship a broken ldd wrapper).
+trace_object() {
     local target="$1"
-    # Get direct dependencies
-    local deps
-    deps=$(ldd "$target" 2>/dev/null | grep "=> /" | awk '{print $2}')
-
-    for dep_path in $deps; do
-        # Skip if empty or doesn't exist
-        [ -z "$dep_path" ] && continue
-        [ ! -f "$dep_path" ] && continue
-
-        local dep_name
-        dep_name=$(basename "$dep_path")
-
-        # Skip if already bundled
-        if echo "$BUNDLED_LIST" | grep -q "^${dep_name}$"; then
-            continue
+    local out out2 ldso
+    out=$(ldd "$target" 2>&1) || true
+    if ! printf '%s\n' "$out" | grep -q "=> /"; then
+        # Data-only libraries (e.g. libicudata) have no dynamic deps; ldd
+        # reports "statically linked" - that is a valid, empty trace.
+        if printf '%s\n' "$out" | grep -q "statically linked"; then
+            printf '%s\n' "$out"
+            return 0
         fi
-
-        # Copy the library into usr/lib
-        cp "$dep_path" "usr/lib/$dep_name"
-        echo "  Bundled: $dep_name"
-        BUNDLED_LIST="$BUNDLED_LIST
-$dep_name"
-    done
+        ldso="/lib64/ld-linux-x86-64.so.2"
+        if [ -x "$ldso" ]; then
+            out2=$("$ldso" --list "$target" 2>&1) || true
+            if printf '%s\n' "$out2" | grep -q "=> /"; then
+                echo "  NOTE: ldd gave no usable trace for $target; used ${ldso} --list instead" >&2
+                echo "  (ldd said: $(printf '%s' "$out" | head -3))" >&2
+                out="$out2"
+            fi
+        fi
+    fi
+    if ! printf '%s\n' "$out" | grep -q "=> /"; then
+        if printf '%s\n' "$out" | grep -q "statically linked"; then
+            printf '%s\n' "$out"
+            return 0
+        fi
+        echo "ERROR: could not trace dependencies of '$target' (cwd: $PWD)" >&2
+        echo "--- full trace output ---" >&2
+        printf '%s\n' "$out" >&2
+        echo "-------------------------" >&2
+        exit 1
+    fi
+    printf '%s\n' "$out"
 }
 
-# Iterative approach: keep bundling until no new libs are found
-MAX_ITERATIONS=5
-iteration=0
-while [ $iteration -lt $MAX_ITERATIONS ]; do
-    before_count=$(echo "$BUNDLED_LIST" | grep -c "." 2>/dev/null || true)
-
-    # Bundle deps of the main binary
-    bundle_deps "bin/@SLIC3R_APP_CMD@"
-
-    # Bundle deps of OCCTWrapper.so
-    if [ -f "bin/OCCTWrapper.so" ]; then
-        bundle_deps "bin/OCCTWrapper.so"
+# Scan one ELF object: bundle every not-yet-present non-glibc dependency.
+# Newly copied libraries are appended to the global QUEUE (worklist), so the
+# caller can loop until the closure converges.
+QUEUE=""
+scan_object() {
+    local target="$1"
+    local out missing dep_path dep_name
+    out=$(trace_object "$target")
+    missing=$(printf '%s\n' "$out" | grep "not found" || true)
+    if [ -n "$missing" ]; then
+        echo "ERROR: '$target' needs libraries that are NOT installed on this build host:" >&2
+        printf '%s\n' "$missing" >&2
+        echo "       Shipping it would fail to launch on clean systems (the exact bug" >&2
+        echo "       this bundling exists to prevent). Install the missing -dev/runtime" >&2
+        echo "       packages on the build host and re-run." >&2
+        exit 1
     fi
+    # ldd line shape: "libfoo.so.N => /path/libfoo.so.N (0x...)" - the path is
+    # field 3 (field 2 is the "=>" token; grabbing it silently bundles nothing).
+    while read -r dep_path; do
+        [ -n "$dep_path" ] || continue
+        [ -f "$dep_path" ] || continue
+        dep_name=$(basename "$dep_path")
+        case "$SKIP_LIBS" in *" $dep_name "*) continue ;; esac
+        if [ -e "$LIB_DIR/$dep_name" ]; then continue; fi
+        cp -L "$dep_path" "$LIB_DIR/$dep_name" || {
+            echo "ERROR: failed to copy $dep_path -> $LIB_DIR/$dep_name" >&2
+            exit 1
+        }
+        echo "  Bundled: $dep_name"
+        QUEUE="$QUEUE
+$LIB_DIR/$dep_name"
+    done < <(printf '%s\n' "$out" | grep "=> /" | awk '{print $3}')
+}
 
-    # Bundle deps of every newly copied library (transitive)
-    for lib in usr/lib/*.so; do
-        [ -f "$lib" ] || continue
-        bundle_deps "$lib"
-    done
-
-    after_count=$(echo "$BUNDLED_LIST" | grep -c "." 2>/dev/null || true)
-
-    if [ "$before_count" = "$after_count" ]; then
-        echo "  No new libraries found (iteration $iteration)"
-        break
-    fi
-    iteration=$((iteration + 1))
-done
-
-lib_count=$(ls -1 usr/lib/*.so 2>/dev/null | wc -l || echo 0)
-echo "  Total libraries bundled: $lib_count"
-
-# ---------------------------------------------------------------------------
-# Set rpath so the binary finds bundled libraries at runtime
-# ---------------------------------------------------------------------------
-if command -v patchelf &> /dev/null; then
-    echo "Setting rpath with patchelf..."
-    patchelf --set-rpath '$ORIGIN/../usr/lib' "bin/@SLIC3R_APP_CMD@"
-    if [ -f "bin/OCCTWrapper.so" ]; then
-        patchelf --set-rpath '$ORIGIN/../usr/lib' "bin/OCCTWrapper.so"
+# (a) Wholesale copy of OUR built dependencies (wx, boost, tbb, glew, ...).
+DEPS_LIB_DIR="$PWD/../../deps/build/destdir/usr/local/lib"
+if [ -d "$DEPS_LIB_DIR" ]; then
+    n=$(find "$DEPS_LIB_DIR" -maxdepth 1 -name '*.so*' 2>/dev/null | wc -l)
+    if [ "$n" -gt 0 ]; then
+        echo "  Copying $n shared object(s) from deps destdir"
+        find "$DEPS_LIB_DIR" -maxdepth 1 -name '*.so*' -exec cp -a {} "$LIB_DIR/" \;
+    else
+        echo "  deps destdir contains no shared objects (static deps) - nothing to wholesale-copy"
     fi
 else
-    echo "WARNING: patchelf not found, using objcopy fallback..."
-    objcopy --add-rpath '$ORIGIN/../usr/lib' "bin/@SLIC3R_APP_CMD@"
-    if [ -f "bin/OCCTWrapper.so" ]; then
-        objcopy --add-rpath '$ORIGIN/../usr/lib' "bin/OCCTWrapper.so"
-    fi
+    echo "  NOTE: deps destdir not found at $DEPS_LIB_DIR - relying on the ldd closure only"
 fi
 
+# (b) Transitive closure starting from the two shipped ELF objects.
+if [ ! -f "bin/$CMD" ]; then
+    echo "ERROR: bin/$CMD missing from the AppDir (cwd: $PWD)" >&2
+    exit 1
+fi
+if [ ! -f "bin/OCCTWrapper.so" ]; then
+    echo "ERROR: bin/OCCTWrapper.so missing from the AppDir (cwd: $PWD)" >&2
+    exit 1
+fi
+scan_object "bin/$CMD"
+scan_object "bin/OCCTWrapper.so"
+
+# Walk the worklist until every newly bundled library's own deps are covered.
+round=0
+while [ -n "$(printf '%s' "$QUEUE" | tr -d '[:space:]')" ]; do
+    round=$((round + 1))
+    NEXT="$QUEUE"
+    QUEUE=""
+    while IFS= read -r obj; do
+        [ -n "$obj" ] || continue
+        scan_object "$obj"
+    done <<< "$NEXT"
+done
+echo "  Closure converged after $round round(s)"
+
+lib_count=$(find "$LIB_DIR" -mindepth 1 | wc -l)
+echo "  Total libraries bundled: $lib_count"
+if [ "$lib_count" -lt 20 ]; then
+    echo "ERROR: implausibly few libraries bundled ($lib_count); bundling failed" >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# WebKitGTK helper processes + injected bundle.
+#
+# Release WebKit builds locate WebKitWebProcess / WebKitNetworkProcess /
+# WebKitGPUProcess at the compile-time-baked PKGLIBEXECDIR (e.g.
+# /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1) with NO runtime override:
+# WEBKIT_EXEC_PATH only exists in developer-mode builds (see WebKit's
+# ProcessExecutablePathGLib.cpp). Without the fix below every webview dies
+# with g_error("Unable to spawn a new child process") on any machine that
+# does not have webkit2gtk installed at the exact build-host path.
+#
+# Fix: bundle the helper executables + injected bundle into
+# usr/lib/<webkit2gtk-X.Y>/ and rewrite the baked directory string inside
+# the bundled libwebkit2gtk to a CWD-relative path (fixed-width in-place,
+# NUL-padded - byte offsets must not move). The AppRun wrapper cd's into
+# the AppDir before exec, which is what makes the relative path resolve.
+# ---------------------------------------------------------------------------
+WK_DIR=""
+for cand in /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1 /usr/lib/webkit2gtk-4.1 \
+            /usr/lib/x86_64-linux-gnu/webkit2gtk-4.0 /usr/lib/webkit2gtk-4.0; do
+    if [ -d "$cand" ]; then WK_DIR="$cand"; break; fi
+done
+if [ -n "$WK_DIR" ]; then
+    WK_SUB=$(basename "$WK_DIR")
+    cp -a "$WK_DIR" "$LIB_DIR/$WK_SUB"
+    echo "  Bundled WebKit helpers from $WK_DIR -> usr/lib/$WK_SUB"
+    python3 - "$LIB_DIR" "$WK_SUB" <<'PYEOF'
+import re, sys, pathlib
+lib_dir, sub = pathlib.Path(sys.argv[1]), sys.argv[2].encode()
+rel = b"usr/lib/" + sub
+sub_injected = rel + b"/injected-bundle/"
+for p in sorted(lib_dir.glob("libwebkit2gtk-*.so*")):
+    data = bytearray(p.read_bytes())
+    n = 0
+    # longest pattern first: .../webkit2gtk-4.X/injected-bundle/ before
+    # the bare .../webkit2gtk-4.X directory string
+    for pat, rep in (
+        (rb"/usr/lib/[a-zA-Z0-9_.-]+/webkit2gtk-4\.[01]/injected-bundle/", sub_injected),
+        (rb"/usr/lib/[a-zA-Z0-9_.-]+/webkit2gtk-4\.[01]", rel),
+    ):
+        for m in re.finditer(pat, bytes(data)):
+            s, e = m.span()
+            data[s:e] = rep + b"\x00" * (e - s - len(rep))
+            n += 1
+    if n:
+        p.write_bytes(bytes(data))
+        print(f"  Rewrote {n} baked WebKit helper path(s) in {p.name} -> {sub.decode()}")
+    else:
+        print(f"  WARNING: no baked helper path found in {p.name} - webviews may fail to spawn helpers" )
+PYEOF
+else
+    echo "  WARNING: no webkit2gtk helper dir found on this host - webview helper processes will fail to spawn" >&2
+fi
+
+# ---------------------------------------------------------------------------
+# GIO TLS module (glib-networking): the webview needs HTTPS. GIO modules are
+# dlopened, so they never appear in an ldd closure - bundle the TLS module
+# explicitly (and its deps via the same closure) and point GIO_MODULE_DIR at
+# it from the launcher. Only gnutls is shipped (NOT dconf/proxy modules) so
+# the default GProxyResolver stays schema-free.
+# ---------------------------------------------------------------------------
+GIO_DIR=""
+for cand in /usr/lib/x86_64-linux-gnu/gio/modules /usr/lib/gio/modules; do
+    if [ -f "$cand/libgiognutls.so" ]; then GIO_DIR="$cand"; break; fi
+done
+if [ -n "$GIO_DIR" ]; then
+    mkdir -p "$LIB_DIR/gio/modules"
+    cp -L "$GIO_DIR/libgiognutls.so" "$LIB_DIR/gio/modules/"
+    echo "  Bundled GIO TLS module from $GIO_DIR (webview HTTPS)"
+    QUEUE=""
+    scan_object "$LIB_DIR/gio/modules/libgiognutls.so"
+    while [ -n "$(printf '%s' "$QUEUE" | tr -d '[:space:]')" ]; do
+        NEXT="$QUEUE"; QUEUE=""
+        while IFS= read -r obj; do [ -n "$obj" ] || continue; scan_object "$obj"; done <<< "$NEXT"
+    done
+else
+    echo "  NOTE: glib-networking TLS module not found - webview HTTPS will not work" >&2
+fi
+
+# ---------------------------------------------------------------------------
+# Rpath: point the shipped ELF objects at usr/lib next to them.
+# DT_RPATH (not RUNPATH) so the search applies to transitively loaded
+# libraries as well, not just the object's own direct dependencies.
+# ---------------------------------------------------------------------------
+if ! command -v patchelf >/dev/null 2>&1; then
+    echo "ERROR: patchelf not found - cannot make the AppImage self-contained" >&2
+    exit 1
+fi
+echo "Setting DT_RPATH with patchelf..."
+for obj in "bin/$CMD" "bin/OCCTWrapper.so"; do
+    patchelf --set-rpath '$ORIGIN/../usr/lib' --force-rpath "$obj"
+done
+
+# ---------------------------------------------------------------------------
+# Verification gate: re-trace every ELF we ship. Nothing may be unresolved.
+# ---------------------------------------------------------------------------
+echo "=== Verifying the AppDir is self-contained ==="
+fail=0
+for obj in "bin/$CMD" "bin/OCCTWrapper.so" "$LIB_DIR"/* "$LIB_DIR"/webkit2gtk-*/* "$LIB_DIR"/gio/modules/*; do
+    [ -f "$obj" ] || continue
+    # Trace with the bundle first in the search path - that is the runtime
+    # condition (the launcher sets LD_LIBRARY_PATH to exactly this).
+    out=$(LD_LIBRARY_PATH="$LIB_DIR" trace_object "$obj")
+    if printf '%s\n' "$out" | grep -q "not found"; then
+        echo "ERROR: $obj still has unresolved libraries:" >&2
+        printf '%s\n' "$out" | grep "not found" >&2
+        fail=1
+    fi
+done
+if [ "$fail" -ne 0 ]; then
+    echo "ERROR: AppDir is NOT self-contained; refusing to build the AppImage" >&2
+    exit 1
+fi
 echo "=== Library bundling complete ==="
 
 cp @SLIC3R_APP_CMD@ AppRun
@@ -129,7 +315,11 @@ Categories=Utility;
 MimeType=model/stl;application/vnd.ms-3mfdocument;application/prs.wavefront-obj;application/x-amf;
 EOF
 
-../appimagetool.AppImage .
+if ! APPIMAGE_EXTRACT_AND_RUN=1 ../appimagetool.AppImage . ; then
+    echo "appimagetool could not run directly (no FUSE?) - extracting and retrying"
+    ../appimagetool.AppImage --appimage-extract > /dev/null
+    ./squashfs-root/AppRun .
+    rm -rf squashfs-root
+fi
 mv @SLIC3R_APP_KEY@-x86_64.AppImage ${APP_IMAGE}
 chmod +x ${APP_IMAGE}
-rm -fr usr

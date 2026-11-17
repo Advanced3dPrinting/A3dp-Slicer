@@ -83,9 +83,36 @@ then
     cp src/OCCTWrapper.so package/bin/OCCTWrapper.so
 
     # create bin
-    echo -e '#!/bin/bash\nDIR=$(readlink -f "$0" | xargs dirname)\nexport LD_LIBRARY_PATH="$DIR/bin"\nexec "$DIR/bin/@SLIC3R_APP_CMD@" "$@"' > package/@SLIC3R_APP_CMD@
+    # usr/lib holds the bundled non-glibc libraries (see build_appimage.sh);
+    # including it in LD_LIBRARY_PATH is belt-and-suspenders on top of DT_RPATH.
+    # Launcher wrappers: set the bundle library path, cd into the AppDir
+    # (WebKit's baked helper path was rewritten to be CWD-relative - see
+    # build_appimage.sh) and point WebKit/GIO at the bundled pieces.
+    cat > package/@SLIC3R_APP_CMD@ <<'LAUNCHER_EOF'
+#!/bin/bash
+DIR=$(readlink -f "$0" | xargs dirname)
+cd "$DIR"
+export LD_LIBRARY_PATH="$DIR/bin:$DIR/usr/lib"
+export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+for d in "$DIR"/usr/lib/webkit2gtk-*; do
+    [ -d "$d/injected-bundle" ] && export WEBKIT_INJECTED_BUNDLE_PATH="$d/injected-bundle"
+done
+[ -d "$DIR/usr/lib/gio/modules" ] && export GIO_MODULE_DIR="$DIR/usr/lib/gio/modules"
+exec "$DIR/bin/@SLIC3R_APP_CMD@" "$@"
+LAUNCHER_EOF
     chmod ug+x package/@SLIC3R_APP_CMD@
-    echo -e '#!/bin/bash\nDIR=$(readlink -f "$0" | xargs dirname)\nexport LD_LIBRARY_PATH="$DIR/bin"\nexec "$DIR/bin/@GCODEVIEWER_APP_CMD@" "$@"' > package/@GCODEVIEWER_APP_CMD@
+    cat > package/@GCODEVIEWER_APP_CMD@ <<'LAUNCHER_EOF'
+#!/bin/bash
+DIR=$(readlink -f "$0" | xargs dirname)
+cd "$DIR"
+export LD_LIBRARY_PATH="$DIR/bin:$DIR/usr/lib"
+export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+for d in "$DIR"/usr/lib/webkit2gtk-*; do
+    [ -d "$d/injected-bundle" ] && export WEBKIT_INJECTED_BUNDLE_PATH="$d/injected-bundle"
+done
+[ -d "$DIR/usr/lib/gio/modules" ] && export GIO_MODULE_DIR="$DIR/usr/lib/gio/modules"
+exec "$DIR/bin/@GCODEVIEWER_APP_CMD@" "$@"
+LAUNCHER_EOF
     chmod ug+x package/@GCODEVIEWER_APP_CMD@
     echo -e "\n... done\n"
 fi
@@ -95,14 +122,20 @@ then
     echo -e "\n[8/8] Creating .tgz and Appimage for distribution ...\n"
 
     pushd package > /dev/null
+    # Build the AppImage FIRST: it bundles every non-glibc library into
+    # usr/lib/ and rpaths the binaries. The .tgz is then cut from the same
+    # bundled tree, so both artifacts are standalone.
+    chmod +x ../src/build_appimage.sh
+    ../src/build_appimage.sh
+
     if [[ "$GTK_VERSION" == 2 ]]
     then
        echo -e "\ntaring for gtk2..."
-       tar -czvf ../@SLIC3R_APP_KEY@${VERSION_NUMBER}-linux-x64-GTK2.tgz .  &>/dev/null
+       tar -czf ../@SLIC3R_APP_KEY@${VERSION_NUMBER}-linux-x64-GTK2.tgz @SLIC3R_APP_CMD@ @GCODEVIEWER_APP_CMD@ bin resources usr
     elif [[ "$GTK_VERSION" == 3 ]]
     then
        echo -e "\ntaring for gtk3..."
-       tar -czvf ../@SLIC3R_APP_KEY@${VERSION_NUMBER}-linux-x64-GTK3.tgz .  &>/dev/null
+       tar -czf ../@SLIC3R_APP_KEY@${VERSION_NUMBER}-linux-x64-GTK3.tgz @SLIC3R_APP_CMD@ @GCODEVIEWER_APP_CMD@ bin resources usr
     else
         echo -e "\nError, only GTK2 and GTK3 verison are supported. Asked GTK version: '$GTK_VERSION'\n"
     fi
@@ -115,8 +148,6 @@ then
     ls -al $ROOT/bin
     echo "> ls -al ROOT(build)/src"
     ls -al $ROOT/src
-    chmod +x ../src/build_appimage.sh
-    ../src/build_appimage.sh
     popd  > /dev/null
     if [[ "$GTK_VERSION" == 2 ]]
     then
