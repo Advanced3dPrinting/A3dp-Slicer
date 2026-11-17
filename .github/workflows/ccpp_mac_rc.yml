@@ -37,7 +37,13 @@ jobs:
         sudo make install
         automake --version
     - name: Install makeinfo
-      run: brew install texinfo
+      # Homebrew marks macOS-15 Intel Tier-3: the texinfo bottle pours fine but
+      # `brew postinstall texinfo` (info-dir index update) deterministically
+      # fails, failing the whole step. The deps build only needs the makeinfo
+      # binary, so tolerate the postinstall failure and verify makeinfo works.
+      run: |
+        brew install texinfo || true
+        makeinfo --version
     - name: mkdir in deps
       run: mkdir deps/build
     - name: dep cache
@@ -80,7 +86,13 @@ jobs:
         sudo make install
         automake --version
     - name: Install makeinfo
-      run: brew install texinfo
+      # Homebrew marks macOS-15 Intel Tier-3: the texinfo bottle pours fine but
+      # `brew postinstall texinfo` (info-dir index update) deterministically
+      # fails, failing the whole step. The deps build only needs the makeinfo
+      # binary, so tolerate the postinstall failure and verify makeinfo works.
+      run: |
+        brew install texinfo || true
+        makeinfo --version
     - name: dep cache
       id: cache-action
       uses: actions/cache@v3
