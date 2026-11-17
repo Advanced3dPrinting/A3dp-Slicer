@@ -1,0 +1,43 @@
+diff --git a/src/gtk/webview_webkit2.cpp b/src/gtk/webview_webkit2.cpp
+index a016124..bc4e238 100644
+--- a/src/gtk/webview_webkit2.cpp
++++ b/src/gtk/webview_webkit2.cpp
+@@ -17,6 +17,7 @@
+ #include "wx/stdpaths.h"
+ #include "wx/stockitem.h"
+ #include "wx/gtk/webview_webkit.h"
++#include <libsoup/soup-version.h>
+ #include "wx/gtk/control.h"
+ #include "wx/gtk/private.h"
+ #include "wx/filesys.h"
+@@ -166,24 +167,30 @@ wxgtk_webview_webkit_load_failed(WebKitWebView *,
+     {
+         switch (error->code)
+         {
++#if SOUP_MAJOR_VERSION < 3
+             case SOUP_STATUS_CANCELLED:
+                 type = wxWEBVIEW_NAV_ERR_USER_CANCELLED;
+                 break;
+ 
+             case SOUP_STATUS_CANT_RESOLVE:
++#endif
+             case SOUP_STATUS_NOT_FOUND:
+                 type = wxWEBVIEW_NAV_ERR_NOT_FOUND;
+                 break;
+ 
++#if SOUP_MAJOR_VERSION < 3
+             case SOUP_STATUS_CANT_RESOLVE_PROXY:
+             case SOUP_STATUS_CANT_CONNECT:
+             case SOUP_STATUS_CANT_CONNECT_PROXY:
+             case SOUP_STATUS_SSL_FAILED:
+             case SOUP_STATUS_IO_ERROR:
++#endif
+                 type = wxWEBVIEW_NAV_ERR_CONNECTION;
+                 break;
+ 
++#if SOUP_MAJOR_VERSION < 3
+             case SOUP_STATUS_MALFORMED:
++#endif
+                 type = wxWEBVIEW_NAV_ERR_REQUEST;
+                 break;
+ 

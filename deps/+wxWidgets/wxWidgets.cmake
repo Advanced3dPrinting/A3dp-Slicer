@@ -24,9 +24,11 @@ add_cmake_project(wxWidgets
     # The pinned fork's find modules hardcode webkit2gtk-4.0 (libsoup2), which
     # is EOL and absent from modern distros (Ubuntu 22.10+/Debian 12/Arch).
     # Retarget them to webkit2gtk-4.1 (libsoup3) - the webkit2 C API and the
-    # include tree layout (webkitgtk-4.1) are identical.
+    # include tree layout (webkitgtk-4.1) are identical. webview_webkit2.cpp
+    # additionally uses soup2-only transport status codes (removed in libsoup3)
+    # - guarded by webview_webkit2_soup3_compat.patch.
     PATCH_COMMAND /bin/sh -c
-        "sed -i 's/WEBKIT2_VERSION 4\\.0/WEBKIT2_VERSION 4.1/' build/cmake/modules/FindWEBKIT2.cmake && sed -i 's/soup-2\\.4/soup-3.0/g' build/cmake/modules/FindLIBSOUP.cmake"
+        "sed -i 's/WEBKIT2_VERSION 4\\.0/WEBKIT2_VERSION 4.1/' build/cmake/modules/FindWEBKIT2.cmake && sed -i 's/soup-2\\.4/soup-3.0/g' build/cmake/modules/FindLIBSOUP.cmake && ${PATCH_CMD} ${CMAKE_CURRENT_LIST_DIR}/webview_webkit2_soup3_compat.patch"
     CMAKE_ARGS
         "-DCMAKE_DEBUG_POSTFIX:STRING="
         -DwxBUILD_PRECOMP=ON
