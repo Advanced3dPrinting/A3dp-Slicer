@@ -132,7 +132,9 @@ BackgroundSlicingProcess::~BackgroundSlicingProcess()
 	std::string prefix = boost::filesystem::path(m_temp_output_path).filename().string();
 	prefix = prefix.substr(0, prefix.find('_'));
     for (const auto& entry : boost::filesystem::directory_iterator(temp_dir)) {
-        if (entry.is_regular_file()) {
+        // Free function, not the directory_entry member: the member only exists in
+        // boost >= 1.89, the local (.232) build links boost 1.82.
+        if (boost::filesystem::is_regular_file(entry)) {
             const std::string filename = entry.path().filename().string();
             if (boost::starts_with(filename, prefix) && boost::ends_with(filename, ".gcode"))
                 boost::filesystem::remove(entry);
