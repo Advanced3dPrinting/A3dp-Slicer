@@ -935,11 +935,6 @@ void GUI_App::post_init()
         CallAfter([this] {
             // preset_updater->sync downloads profile updates on background so it must begin after config wizard finished.
             bool cw_showed = this->config_wizard_startup();
-#ifndef USE_GTHUB_PRESET_UPDATE
-    ///////////////////////// -supermerill: old prusa code for the old way to update profiles /////////////////////////
-    ///////////////////////// not used anymore 
-            this->preset_updater->sync(preset_bundle.get(), this);
-#endif
             if (! cw_showed) {
                 this->preset_updater->set_installed_vendors(preset_bundle.get());
                 this->preset_updater->reload_all_vendors();
@@ -1730,17 +1725,9 @@ bool GUI_App::on_init_inner()
                 }
         }); 
         
-#ifndef USE_GTHUB_PRESET_UPDATE
-    ///////////////////////// -supermerill: old prusa code for the old way to update profiles /////////////////////////
-    ///////////////////////// not used anymore 
-        Bind(EVT_CONFIG_UPDATER_SYNC_DONE, [this](const wxCommandEvent& evt) {
-            check_updates(true);
-        });
-#else
         Bind(EVT_CONFIG_UPDATER_SHOW_DIALOG, [this](const wxCommandEvent& evt) {
             this->preset_updater->show_synch_window(this->plater(), _L("Managing vendor bundles (hover for more information):"), [](bool){});
         }); 
-#endif
         Bind(EVT_WIZARD_SHOW_DIALOG, [this](const wxCommandEvent& evt) {
             int args = evt.GetInt();
             int rr_arg = args % 8;
@@ -3392,11 +3379,6 @@ void GUI_App::add_config_menu(wxMenuBar *menu)
             run_wizard(ConfigWizard::RR_USER);
             break;
         case ConfigMenuUpdateConf:
-#ifndef USE_GTHUB_PRESET_UPDATE
-    ///////////////////////// -supermerill: old prusa code for the old way to update profiles /////////////////////////
-    ///////////////////////// not used anymore 
-            check_updates(true);
-#else
             assert(this->preset_updater);
             if (this->preset_updater) {
                 bool is_in_synch = this->preset_updater->synch_process_ongoing;
@@ -3436,7 +3418,6 @@ void GUI_App::add_config_menu(wxMenuBar *menu)
                     this->QueueEvent(evt);
                 });
             }
-#endif
             break;
         case ConfigMenuUpdateApp:
             app_version_check(true);
@@ -4070,17 +4051,6 @@ bool GUI_App::run_wizard(ConfigWizard::RunReason reason, ConfigWizard::StartPage
 {
     wxCHECK_MSG(mainframe != nullptr, false, "Internal error: Main frame not created / null");
     
-#ifndef USE_GTHUB_PRESET_UPDATE
-    ///////////////////////// -supermerill: old prusa code for the old way to update profiles /////////////////////////
-    ///////////////////////// not used anymore 
-    if (reason == ConfigWizard::RR_USER) {
-        // Cancel sync before starting wizard to prevent two downloads at same time
-        preset_updater->cancel_sync();
-        preset_updater->update_index_db();
-        if (preset_updater->config_update(app_config->orig_version(), PresetUpdater::UpdateParams::FORCED_BEFORE_WIZARD) == PresetUpdater::R_ALL_CANCELED)
-            return false;
-    }
-#endif
     // if nothing installed, show the installatino dialog first
     bool is_synch = this->preset_updater->is_synch;
     if (!is_synch) {
@@ -4316,34 +4286,6 @@ bool GUI_App::config_wizard_startup()
     return false;
 }
 
-#ifndef USE_GTHUB_PRESET_UPDATE
-    ///////////////////////// -supermerill: old prusa code for the old way to update profiles /////////////////////////
-    ///////////////////////// not used anymore 
-bool GUI_App::check_updates(const bool verbose, int nb_updates)
-{	
-	PresetUpdater::UpdateResult updater_result;
-	try {
-        preset_updater->update_index_db();
-		updater_result = preset_updater->config_update(app_config->orig_version(), verbose ? PresetUpdater::UpdateParams::SHOW_TEXT_BOX : PresetUpdater::UpdateParams::SHOW_NOTIFICATION);
-		if (updater_result == PresetUpdater::R_INCOMPAT_EXIT) {
-			mainframe->Close();
-            // Applicaiton is closing.
-            return false;
-		}
-		else if (updater_result == PresetUpdater::R_INCOMPAT_CONFIGURED) {
-            m_app_conf_exists = true;
-		}
-		else if (verbose && updater_result == PresetUpdater::R_NOOP) {
-			MsgNoUpdates dlg;
-			dlg.ShowModal();
-		}
-	} catch (const std::exception &ex) {
-		show_error(nullptr, ex.what());
-	}
-    // Applicaiton will continue.
-    return true;
-}
-#else
 bool GUI_App::check_updates(const bool verbose, int nb_updates) {
     if (nb_updates > 0) {
         // Show notification
@@ -4354,7 +4296,6 @@ bool GUI_App::check_updates(const bool verbose, int nb_updates) {
     // Applicaiton will continue.
     return true;
 }
-#endif
 
 bool GUI_App::open_browser_with_warning_dialog(const wxString& url,  wxWindow* parent/* = nullptr*/, bool allow_remember_choice/* = true*/, int flags/* = 0*/)
 {

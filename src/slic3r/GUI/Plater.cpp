@@ -2791,11 +2791,7 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
         this->q->Bind(EVT_EJECT_DRIVE_NOTIFICAION_CLICKED, [this](EjectDriveNotificationClickedEvent&) { this->q->eject_drive(); });
         this->q->Bind(EVT_EXPORT_GCODE_NOTIFICAION_CLICKED, [this](ExportGcodeNotificationClickedEvent&) { this->q->export_gcode(true); });
         this->q->Bind(EVT_PRESET_UPDATE_AVAILABLE_CLICKED, [this](PresetUpdateAvailableClickedEvent &) {
-#ifdef USE_GTHUB_PRESET_UPDATE
             wxGetApp().get_preset_updater()->show_synch_window(this->q, _L("Managing vendor bundles:"), [](bool){});
-#else
-            wxGetApp().get_preset_updater()->on_update_notification_confirm();
-#endif
         });
         this->q->Bind(EVT_REMOVABLE_DRIVE_EJECTED, [this, q](RemovableDriveEjectEvent &evt) {
 		    if (evt.data.second) {

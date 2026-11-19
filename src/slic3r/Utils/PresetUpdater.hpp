@@ -25,9 +25,13 @@ class Semver;
 class PresetUpdater;
 class PresetBundle;
 
-#define USE_GTHUB_PRESET_UPDATE 1
 // used when config wizard has a MAIN_VENDOR
 #define MANDATORY_VENDOR "A3dp"
+
+// Copies <vendor_id>.ini plus the <vendor_id>/ resource (icons, bed models/textures, thumbnails)
+// subtree from dir_in into dir_out. The ini is copied via a temp file + rename (safe overwrite).
+// Implemented in PresetUpdater.cpp; also used by ConfigWizard to install embedded vendor bundles.
+bool copy_file_and_icons(boost::filesystem::path dir_in, boost::filesystem::path dir_out, std::string vendor_id, bool copy);
 
 struct VendorAvailable
 {

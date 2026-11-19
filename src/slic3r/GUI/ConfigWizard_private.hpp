@@ -681,6 +681,9 @@ struct ConfigWizard::priv
     bool on_bnt_finish();
     bool check_and_install_missing_materials(Technology technology, const std::string &only_for_model_id = std::string());
     bool apply_config(AppConfig *app_config, PresetBundle *preset_bundle, const PresetUpdater *updater, bool& apply_keeped_changes);
+    // Copies vendor bundles enabled in the wizard (but only present in resources / the updater
+    // cache) into datadir/vendor, where load_system_presets() reads them at runtime.
+    bool install_bundles_rsrc_or_cache_vendor(std::vector<std::string> bundles, bool dialog_install_bundles);
     // #ys_FIXME_alise
     void update_presets_in_config(const std::string& section, const std::string& alias_key, bool add);
 //#ifdef __linux__
