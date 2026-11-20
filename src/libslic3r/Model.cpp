@@ -1719,14 +1719,59 @@ unsigned int ModelObject::update_instances_print_volume_state(const BuildVolume 
         INSIDE = 1,
         OUTSIDE = 2
     };
+
+    // For rectangular build volumes, run the per-volume state test on the transformed bounding
+    // box only (the same approach as Bambu Studio / OrcaSlicer, and as our own
+    // GLCanvas3D::check_volumes_outside_state), instead of transforming and testing every vertex
+    // of every volume mesh against every bed. This turns the per-user-action cost of the
+    // Plater::priv::update() scan chain from O(triangles x beds) into O(beds) per volume.
+    // The local (mesh space) bounding box is cached per volume; TriangleMesh::bounding_box()
+    // is O(1) as it reads precomputed mesh statistics.
+    const bool use_bbox_test = build_volume.type() == BuildVolume::Type::Rectangle;
+    std::vector<BoundingBoxf3> volume_bboxes;
+    if (use_bbox_test) {
+        volume_bboxes.reserve(this->volumes.size());
+        for (const ModelVolume *vol : this->volumes)
+            volume_bboxes.emplace_back(vol->is_model_part() ? vol->mesh().bounding_box() : BoundingBoxf3());
+    }
+
     for (ModelInstance* model_instance : this->instances) {
         int bed_idx = -1;
         unsigned int inside_outside = 0;
-        for (const ModelVolume* vol : this->volumes)
+        size_t volume_idx = 0;
+        for (const ModelVolume* vol : this->volumes) {
             if (vol->is_model_part()) {
                 const Transform3d matrix = model_instance->get_matrix() * vol->get_matrix();
                 int bed = -1;
-                BuildVolume::ObjectState state = build_volume.object_state(vol->mesh().its, matrix.cast<float>(), true /* may be below print bed */, true /*ignore_bottom*/, &bed);
+                BuildVolume::ObjectState state;
+                if (use_bbox_test) {
+                    const BoundingBoxf3 &local_bbox = volume_bboxes[volume_idx];
+                    // World space bounding box of the volume: merge the 8 transformed corners
+                    // (exact for affine transforms, O(1) instead of O(vertices)).
+                    // Seed with the first corner: the default bbox is Zero/Zero and merge()
+                    // alone would wrongly extend it to the origin.
+                    BoundingBoxf3 bbox(matrix * Vec3d(local_bbox.min.x(), local_bbox.min.y(), local_bbox.min.z()),
+                                       matrix * Vec3d(local_bbox.min.x(), local_bbox.min.y(), local_bbox.min.z()));
+                    for (int i = 1; i < 8; ++ i)
+                        bbox.merge(matrix * Vec3d(i & 1 ? local_bbox.max.x() : local_bbox.min.x(),
+                                                  i & 2 ? local_bbox.max.y() : local_bbox.min.y(),
+                                                  i & 4 ? local_bbox.max.z() : local_bbox.min.z()));
+                    if (bbox.max.z() <= -BuildVolume::SceneEpsilon) {
+                        // Volume completely below the print bed surface. Same semantics as
+                        // BuildVolume::object_state() with may_be_below_bed=true: report Below
+                        // and assign the volume to the first bed.
+                        state = BuildVolume::ObjectState::Below;
+                        bed = 0;
+                    } else
+                        state = build_volume.volume_state_bbox(bbox, true /*ignore_bottom*/, &bed);
+                    // Note: the bbox test is conservative for non-convex volumes straddling the
+                    // build volume edge: such a volume may be reported as Colliding even when the
+                    // mesh itself is completely inside or completely outside the build volume.
+                    // This is the same accepted tradeoff as in Bambu Studio / OrcaSlicer, and it
+                    // never misses a volume that is fully outside the build volume footprint
+                    // (disjoint bounding boxes imply disjoint meshes).
+                } else
+                    state = build_volume.object_state(vol->mesh().its, matrix.cast<float>(), true /* may be below print bed */, true /*ignore_bottom*/, &bed);
                 if (bed_idx == -1) // instance will be assigned to the bed the first volume is assigned to.
                     bed_idx = bed;
                 if (state == BuildVolume::ObjectState::Inside)
@@ -1742,6 +1787,8 @@ unsigned int ModelObject::update_instances_print_volume_state(const BuildVolume 
                     // Volume colliding with the build volume.
                     inside_outside |= INSIDE | OUTSIDE;
             }
+            ++ volume_idx;
+        }
         model_instance->print_volume_state =
             inside_outside == (INSIDE | OUTSIDE) ? ModelInstancePVS_Partly_Outside :
             inside_outside == INSIDE ? ModelInstancePVS_Inside : ModelInstancePVS_Fully_Outside;

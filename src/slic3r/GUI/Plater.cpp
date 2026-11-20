@@ -4054,11 +4054,16 @@ std::vector<Print::ApplyStatus> apply_to_inactive_beds(
             auto t0 = std::chrono::steady_clock::now();
             result[bed_index] = print->apply(model, config);
             BOOST_LOG_TRIVIAL(trace) << "PERF Print::apply inactive bed " << bed_index << ": "
-                << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() << " ms";
+                << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()
+                << " ms, status " << int(result[bed_index]);
         });
     }
     return result;
 }
+
+// Per-bed dirty flags for the bed selector thumbnails: update_background_process() marks
+// the beds whose Print content changed; regenerate_thumbnails() re-renders only those.
+static std::array<bool, MAX_NUMBER_OF_BEDS> s_bed_thumbnail_dirty;
 
 void Plater::priv::regenerate_thumbnails(SimpleEvent&) {
     auto t0 = std::chrono::steady_clock::now();
@@ -4080,12 +4085,26 @@ void Plater::priv::regenerate_thumbnails(SimpleEvent&) {
     int curr_unpack_alignment = 0;
     glsafe(glGetIntegerv(GL_UNPACK_ALIGNMENT, &curr_unpack_alignment));
     glsafe(glPixelStorei(GL_UNPACK_ALIGNMENT, 1));
-    glsafe(glDeleteTextures(s_bed_selector_thumbnail_texture_ids.size(), s_bed_selector_thumbnail_texture_ids.data()));
-    s_bed_selector_thumbnail_changed.fill(false);
 
-    s_bed_selector_thumbnail_texture_ids.resize(num);
-    glsafe(glGenTextures(num, s_bed_selector_thumbnail_texture_ids.data()));
+    // Regenerate everything when the texture array does not match the bed count (beds
+    // added/removed, or first run), or when no bed is marked dirty (the event was queued
+    // from outside the update_background_process() path, e.g. from 3DBed or the sidebar).
+    bool any_dirty = false;
+    for (int i = 0; i < num; ++ i)
+        any_dirty |= s_bed_thumbnail_dirty[i];
+    const bool full_regen = int(s_bed_selector_thumbnail_texture_ids.size()) != num || ! any_dirty;
+    if (full_regen) {
+        glsafe(glDeleteTextures(s_bed_selector_thumbnail_texture_ids.size(), s_bed_selector_thumbnail_texture_ids.data()));
+        s_bed_selector_thumbnail_texture_ids.resize(num);
+        glsafe(glGenTextures(num, s_bed_selector_thumbnail_texture_ids.data()));
+        s_bed_thumbnail_dirty.fill(true);
+    }
+
+    int rendered = 0;
     for (int i = 0; i < num; ++i) {
+        if (! s_bed_thumbnail_dirty[i])
+            // Thumbnail content of this bed did not change: keep the existing texture.
+            continue;
         s_multiple_beds.set_thumbnail_bed_idx(i);
         generate_thumbnail(data, w, h, params, GUI::Camera::EType::Ortho);
         s_multiple_beds.set_thumbnail_bed_idx(-1);
@@ -4095,12 +4114,14 @@ void Plater::priv::regenerate_thumbnails(SimpleEvent&) {
         glsafe(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0));
         glsafe(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, static_cast<GLsizei>(w), static_cast<GLsizei>(h), 0, GL_RGBA, GL_UNSIGNED_BYTE, data.pixels.data()));
         s_bed_selector_thumbnail_changed[i] = true;
+        s_bed_thumbnail_dirty[i] = false;
+        ++ rendered;
     }
     glsafe(glBindTexture(GL_TEXTURE_2D, curr_bound_texture));
     glsafe(glPixelStorei(GL_UNPACK_ALIGNMENT, curr_unpack_alignment));
     BOOST_LOG_TRIVIAL(trace) << "PERF regenerate_thumbnails: "
         << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()
-        << " ms (" << num << " beds, full regen)";
+        << " ms (" << rendered << "/" << num << " beds re-rendered, " << (full_regen ? "full" : "dirty-only") << ")";
 }
 
 // Update background processing thread from the current config and Model.
@@ -4196,6 +4217,11 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
     if (printer_technology == ptFFF) {
         for (std::size_t bed_index{0}; bed_index < q->p->fff_prints.size(); ++bed_index) {
             const std::unique_ptr<Print> &print{q->p->fff_prints[bed_index]};
+            if (apply_statuses[bed_index] == Print::ApplyStatus::APPLY_STATUS_UNCHANGED)
+                // The Print content is identical to the previous cycle, so its validation
+                // result cannot have changed. Skip the (not cheap) validation of beds that
+                // were not touched by this edit.
+                continue;
             using MultipleBedsUtils::with_single_bed_model_fff;
             with_single_bed_model_fff(model, bed_index, [&](){
             
@@ -4223,6 +4249,11 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
 
     // If current bed was invalidated, update thumbnails for all beds:
     if (any_status_changed) {
+        // Mark the beds whose Print content changed as needing a thumbnail re-render,
+        // so regenerate_thumbnails() only re-renders those (not all beds).
+        for (std::size_t bed_index{0}; bed_index < apply_statuses.size(); ++bed_index)
+            s_bed_thumbnail_dirty[bed_index] = s_bed_thumbnail_dirty[bed_index]
+                || apply_statuses[bed_index] != Print::ApplyStatus::APPLY_STATUS_UNCHANGED;
         wxQueueEvent(this->q, new SimpleEvent(EVT_REGENERATE_BED_THUMBNAILS));
     }
 

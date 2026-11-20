@@ -358,7 +358,11 @@ void MultipleBeds::update_shown_beds(Model& model, const BuildVolume& build_volu
         }
     )};
     m_number_of_beds = std::min(this->get_max_beds(), max_bed + 1);
-    model.update_print_volume_state(build_volume);
+    // The second scan is only needed when the number of beds changed, as that changes the
+    // range of beds the state test scans over. Otherwise it would be a pure repeat of the
+    // first scan (this is the hot path of Plater::priv::update(), run on every user action).
+    if (m_number_of_beds != original_number_of_beds)
+        model.update_print_volume_state(build_volume);
     set_active_bed(m_number_of_beds != original_number_of_beds ? 0 : stash_active);
     BOOST_LOG_TRIVIAL(trace) << "PERF MultipleBeds::update_shown_beds: "
         << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()
