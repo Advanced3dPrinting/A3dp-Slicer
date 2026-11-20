@@ -34,6 +34,7 @@
 #include "Format/SVG.hpp"
 
 #include <cfloat>
+#include <chrono>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/replace.hpp>
@@ -463,11 +464,18 @@ double Model::max_z() const
 
 unsigned int Model::update_print_volume_state(const BuildVolume &build_volume)
 {
+    auto t0 = std::chrono::steady_clock::now();
     unsigned int num_printable = 0;
+    size_t num_instances = 0;
     s_multiple_beds.clear_inst_map();
-    for (ModelObject* model_object : this->objects)
+    for (ModelObject* model_object : this->objects) {
         num_printable += model_object->update_instances_print_volume_state(build_volume);
+        num_instances += model_object->instances.size();
+    }
     s_multiple_beds.inst_map_updated();
+    BOOST_LOG_TRIVIAL(trace) << "PERF Model::update_print_volume_state: "
+        << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()
+        << " ms (" << this->objects.size() << " objects, " << num_instances << " instances)";
     return num_printable;
 }
 

@@ -2889,6 +2889,7 @@ Plater::priv::~priv()
 
 void Plater::priv::update(unsigned int flags)
 {
+    auto t0 = std::chrono::steady_clock::now();
     // the following line, when enabled, causes flickering on NVIDIA graphics cards
 //    wxWindowUpdateLocker freeze_guard(q);
     if (get_config_bool("autocenter"))
@@ -2910,6 +2911,9 @@ void Plater::priv::update(unsigned int flags)
 
     if (get_config_bool("autocenter") && this->sidebar->obj_manipul()->IsShown())
         this->sidebar->obj_manipul()->UpdateAndShow(true);
+
+    BOOST_LOG_TRIVIAL(trace) << "PERF Plater::priv::update: "
+        << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() << " ms";
 }
 
 void Plater::priv::select_view(const std::string& direction)
@@ -4047,13 +4051,17 @@ std::vector<Print::ApplyStatus> apply_to_inactive_beds(
         }
         using MultipleBedsUtils::with_single_bed_model_fff;
         with_single_bed_model_fff(model, bed_index, [&](){
+            auto t0 = std::chrono::steady_clock::now();
             result[bed_index] = print->apply(model, config);
+            BOOST_LOG_TRIVIAL(trace) << "PERF Print::apply inactive bed " << bed_index << ": "
+                << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() << " ms";
         });
     }
     return result;
 }
 
 void Plater::priv::regenerate_thumbnails(SimpleEvent&) {
+    auto t0 = std::chrono::steady_clock::now();
     const int num{s_multiple_beds.get_number_of_beds()};
     if (num <= 1 || num > MAX_NUMBER_OF_BEDS) {
         return;
@@ -4090,6 +4098,9 @@ void Plater::priv::regenerate_thumbnails(SimpleEvent&) {
     }
     glsafe(glBindTexture(GL_TEXTURE_2D, curr_bound_texture));
     glsafe(glPixelStorei(GL_UNPACK_ALIGNMENT, curr_unpack_alignment));
+    BOOST_LOG_TRIVIAL(trace) << "PERF regenerate_thumbnails: "
+        << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()
+        << " ms (" << num << " beds, full regen)";
 }
 
 // Update background processing thread from the current config and Model.
@@ -4098,6 +4109,7 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
 {
     assert(! s_beds_just_switched || background_process.idle());
 
+    auto t_ubp0 = std::chrono::steady_clock::now();
     int active_bed = s_multiple_beds.get_active_bed();
     background_process.set_temp_output_path(active_bed);
     background_process.set_fff_print(fff_prints[active_bed].get());
@@ -4141,11 +4153,14 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
     using MultipleBedsUtils::with_single_bed_model_sla;
 //wxGetApp().preset_bundle->physical_printers.get_selected_printer_config()
 
+    auto t_apply0 = std::chrono::steady_clock::now();
     std::vector<Print::ApplyStatus> apply_statuses{
         printer_technology == ptFFF ?
         apply_to_inactive_beds(q->model(), q->p->fff_prints, full_config) :
         std::vector<Print::ApplyStatus>(1)
     };
+    BOOST_LOG_TRIVIAL(trace) << "PERF apply_to_inactive_beds total: "
+        << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_apply0).count() << " ms";
 
     // Apply new config to the possibly running background task.
     if (printer_technology == ptFFF) {
@@ -4217,6 +4232,9 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
 
     if (invalidated == Print::APPLY_STATUS_CHANGED || background_process.empty())
         view3D->get_canvas3d()->reset_sequential_print_clearance();
+
+    BOOST_LOG_TRIVIAL(trace) << "PERF update_background_process: "
+        << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_ubp0).count() << " ms";
 
     if (invalidated == Print::APPLY_STATUS_INVALIDATED) {
         // Some previously calculated data on the Print was invalidated.

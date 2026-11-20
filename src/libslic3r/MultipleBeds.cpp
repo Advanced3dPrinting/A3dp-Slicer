@@ -6,6 +6,8 @@
 
 #include <cassert>
 #include <algorithm>
+#include <chrono>
+#include <boost/log/trivial.hpp>
 
 namespace Slic3r {
 
@@ -343,6 +345,7 @@ bool MultipleBeds::is_glvolume_on_thumbnail_bed(const Model& model, int obj_idx,
 }
 
 void MultipleBeds::update_shown_beds(Model& model, const BuildVolume& build_volume, bool only_remove /*=false*/) {
+    auto t0 = std::chrono::steady_clock::now();
     const int original_number_of_beds = m_number_of_beds;
     const int stash_active = get_active_bed();
     if (! only_remove)
@@ -357,6 +360,9 @@ void MultipleBeds::update_shown_beds(Model& model, const BuildVolume& build_volu
     m_number_of_beds = std::min(this->get_max_beds(), max_bed + 1);
     model.update_print_volume_state(build_volume);
     set_active_bed(m_number_of_beds != original_number_of_beds ? 0 : stash_active);
+    BOOST_LOG_TRIVIAL(trace) << "PERF MultipleBeds::update_shown_beds: "
+        << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()
+        << " ms (beds " << original_number_of_beds << " -> " << m_number_of_beds << ")";
 }
 
 bool MultipleBeds::rearrange_after_load(Model& model, const BuildVolume& build_volume, std::function<void()> update_fn)
