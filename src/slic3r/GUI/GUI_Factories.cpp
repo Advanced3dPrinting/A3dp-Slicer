@@ -1431,6 +1431,10 @@ wxMenu* MenuFactory::default_menu()
 wxMenu* MenuFactory::object_menu()
 {
     assert(m_scale_submenu != nullptr);
+    // Rebuild the "add volume" section on every popup: it is mode-dependent and
+    // update_mode() may never have run since startup (interrupted init, crash-recovery
+    // modal, ...), which left the menu without it (or stale for another mode).
+    append_menu_items_add_volume(mtObjectFFF);
     append_menu_items_convert_unit(m_scale_submenu);
     append_menu_item_settings(&m_object_menu);
     append_menu_item_change_extruder(&m_object_menu);
@@ -1445,6 +1449,8 @@ wxMenu* MenuFactory::object_menu()
 wxMenu* MenuFactory::sla_object_menu()
 {
     assert(m_sla_scale_submenu != nullptr);
+    // See object_menu(): keep the add-volume section in sync with the current view mode.
+    append_menu_items_add_volume(mtObjectSLA);
     append_menu_items_convert_unit(m_sla_scale_submenu);
     append_menu_item_settings(&m_sla_object_menu);
     update_menu_items_instance_manipulation(mtObjectSLA);
