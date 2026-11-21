@@ -163,27 +163,44 @@ bool Moonraker::do_test(const std::string &url, wxString& msg) const
 
 bool Moonraker::test(wxString& msg) const
 {
-    if (do_test(make_url("server/info"), msg))
-        return true;
-    if (has_explicit_port(m_host))
-        return false;
-
-    // Port auto-probe: the stock Snapmaker U1 firmware is reported to expose
-    // Moonraker on either 7125 (Moonraker default) or 80 (behind the web UI);
-    // community sources conflict, so both are tried when the configured host
-    // carries no explicit port. The winning port is remembered for the upload.
     const char* name = get_name();
-    static const char* ports[] = { "7125", "80" };
-    for (const char* port : ports) {
-        m_host_probed = m_host + ":" + port;
-        const auto url = make_url("server/info");
-        BOOST_LOG_TRIVIAL(info) << boost::format("%1%: Port auto-probe: trying %2%") % name % url;
-        if (do_test(url, msg))
+    // Network exceptions must never escape the Test path: the Test button and
+    // the filament-slot refresh both run on the UI thread, and an exception
+    // escaping into the wx event handler surfaces as an unhandled-exception
+    // dialog. Report it as a failed test with the reason instead.
+    try {
+        if (do_test(make_url("server/info"), msg))
             return true;
+        if (has_explicit_port(m_host))
+            return false;
+
+        // Port auto-probe: the stock Snapmaker U1 firmware is reported to expose
+        // Moonraker on either 7125 (Moonraker default) or 80 (behind the web UI);
+        // community sources conflict, so both are tried when the configured host
+        // carries no explicit port. The winning port is remembered for the upload.
+        static const char* ports[] = { "7125", "80" };
+        for (const char* port : ports) {
+            m_host_probed = m_host + ":" + port;
+            const auto url = make_url("server/info");
+            BOOST_LOG_TRIVIAL(info) << boost::format("%1%: Port auto-probe: trying %2%") % name % url;
+            if (do_test(url, msg))
+                return true;
+        }
+        m_host_probed.clear();
+        msg += "\n" + GUI::from_u8(_u8L("Port auto-probe tried ports 7125 and 80."));
+        return false;
+    } catch (const std::exception &ex) {
+        BOOST_LOG_TRIVIAL(error) << boost::format("%1%: Connection test threw: %2%") % name % ex.what();
+        m_host_probed.clear();
+        msg = GUI::from_u8(_u8L("Cannot connect to ") + m_host + _u8L(" (tried ports 7125 and 80) - printer unreachable"));
+        msg += "\n" + GUI::from_u8(ex.what());
+        return false;
+    } catch (...) {
+        BOOST_LOG_TRIVIAL(error) << name << ": Connection test threw an unknown exception";
+        m_host_probed.clear();
+        msg = GUI::from_u8(_u8L("Cannot connect to ") + m_host + _u8L(" (tried ports 7125 and 80) - printer unreachable"));
+        return false;
     }
-    m_host_probed.clear();
-    msg += "\n" + GUI::from_u8(_u8L("Port auto-probe tried ports 7125 and 80."));
-    return false;
 }
 
 bool Moonraker::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, ErrorFn error_fn, InfoFn info_fn) const

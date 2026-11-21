@@ -388,6 +388,11 @@ wxString SnapmakerU1::get_test_failed_msg(wxString &msg) const
 bool SnapmakerU1::get_filament_slots(std::vector<FilamentSlot> &out, wxString &error, PresetBundle *preset_bundle,
                                      const std::string &printer_model) const
 {
+    // Never let an exception escape: this runs on the UI thread (physical
+    // printer dialog refresh, send dialog map_table). Everything below is
+    // guarded internally; this catch-all is the last line of defense for
+    // unexpected failures (e.g. Http construction).
+    try {
     const char* name = get_name();
 
     // GET /printer/objects/query?print_task_config&filament_detect
@@ -497,6 +502,15 @@ bool SnapmakerU1::get_filament_slots(std::vector<FilamentSlot> &out, wxString &e
     }
 
     return true;
+    } catch (const std::exception &ex) {
+        BOOST_LOG_TRIVIAL(error) << get_name() << ": filament slot fetch threw: " << ex.what();
+        error = _L("Connection failed: ") + GUI::from_u8(ex.what());
+        return false;
+    } catch (...) {
+        BOOST_LOG_TRIVIAL(error) << get_name() << ": filament slot fetch threw an unknown exception";
+        error = _L("Connection failed: unknown error");
+        return false;
+    }
 }
 
 // ---------------------------------------------------------------------------
