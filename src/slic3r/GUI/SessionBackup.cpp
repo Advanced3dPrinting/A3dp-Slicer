@@ -149,7 +149,11 @@ time_t parse_iso_utc(const std::string &iso)
     tmv.tm_hour = h;
     tmv.tm_min  = m;
     tmv.tm_sec  = s;
+#ifdef _WIN32
+    return _mkgmtime(&tmv); // MSVC has no timegm()
+#else
     return timegm(&tmv);
+#endif
 }
 
 // Read /proc/<pid>/stat. Returns false when the process does not exist (or
