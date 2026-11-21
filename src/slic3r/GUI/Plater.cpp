@@ -9150,7 +9150,15 @@ void Plater::send_gcode()
     wxArrayString groups;
     {
         wxBusyCursor wait;
-        upload_job.printhost->get_groups(groups);
+        try {
+            upload_job.printhost->get_groups(groups);
+        } catch (const std::exception &ex) {
+            // PrintHost::get_groups may throw HostNetworkError (Repetier).
+            // Keep the escape in the UI thread graceful: same error path as
+            // the storage query below.
+            show_error(this, _L("Connection to printers connected via the print host failed.") + "\n\n" + GUI::from_u8(ex.what()), false);
+            return;
+        }
     }
     // PrusaLink specific: Query the server for the list of file groups.
     wxArrayString storage_paths;

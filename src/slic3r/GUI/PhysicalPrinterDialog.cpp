@@ -381,11 +381,21 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
                 return;
             }
             wxString msg;
-            bool result;
+            bool result = false;
             {
                 // Show a wait cursor during the connection test, as it is blocking UI.
                 wxBusyCursor wait;
-                result = host->test(msg);
+                try {
+                    result = host->test(msg);
+                } catch (const std::exception &ex) {
+                    // A connection-layer exception (unreachable host, refused
+                    // connection, malformed address) must surface as the same
+                    // "test failed" dialog as a negative result, never escape
+                    // into the wx event handler (unhandled-exception dialog).
+                    msg = _L("Connection failed: ") + wxString::FromUTF8(ex.what());
+                    show_error(this, host->get_test_failed_msg(msg));
+                    return;
+                }
             }
             if (result)
                 show_info(this, host->get_test_ok_msg(), _L("Success!"));

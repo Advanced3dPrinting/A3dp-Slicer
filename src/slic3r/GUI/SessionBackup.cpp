@@ -509,8 +509,13 @@ void gc_stale_sessions()
             fs::remove_all(p, ec);
             fs::remove(marker, ec);
             BOOST_LOG_TRIVIAL(info) << "Session backup: purged stale session " << name;
-        } else if (boost::ends_with(name, MARKER_SUFFIX))
+        } else if (boost::ends_with(name, MARKER_SUFFIX)) {
+            long pid = 0;
+            std::string token;
+            if (read_marker(p, pid, token) && process_alive(pid, token))
+                continue; // owned by a live instance (marker mtimes do not refresh)
             fs::remove(p, ec);
+        }
     }
 }
 
@@ -632,9 +637,14 @@ std::vector<SessionBackup::CrashedSession> SessionBackup::crashed_sessions()
         const fs::path p = it->path();
         const std::string name = p.filename().string();
         if (! fs::is_directory(p, ec)) {
-            // Orphan marker (its session dir is already gone) - clean it up.
-            if (boost::ends_with(name, MARKER_SUFFIX))
-                fs::remove(p, ec);
+            if (boost::ends_with(name, MARKER_SUFFIX)) {
+                // Orphan marker - only when its session dir is already gone.
+                // A marker of a LIVE instance must never be removed here.
+                const std::string suffix(MARKER_SUFFIX);
+                const std::string sid = name.substr(0, name.size() - suffix.size());
+                if (! fs::exists(session_root() / sid, ec))
+                    fs::remove(p, ec);
+            }
             continue;
         }
         if (name == s_session_id)
