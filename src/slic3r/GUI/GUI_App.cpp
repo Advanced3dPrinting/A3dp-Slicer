@@ -1422,11 +1422,11 @@ bool GUI_App::on_init_inner()
     // TODO: remove this when all asserts are gone.
     wxDisableAsserts();
 
-    // Crash session backup: remember whether the PREVIOUS run shut down
-    // cleanly and arm the "session_dirty" flag for this run. The flag is only
-    // cleared in OnExit(), so it survives an unclean shutdown and marks the
-    // next startup as a post-crash start. Arming this early covers crashes
-    // during the rest of the startup as well.
+    // Crash session backup: register this instance's session (a per-instance
+    // backup dir + liveness marker under <data_dir>/session/). Registration
+    // this early covers crashes during the rest of the startup as well. The
+    // registration is removed in OnExit(); a marker left behind by a dead
+    // process marks that session as a restore candidate for the next launch.
     if (is_editor())
         SessionBackup::startup_mark_running();
 
@@ -1876,34 +1876,12 @@ bool GUI_App::on_init_inner()
 
     m_initialized = true;
 
-    // Crash session backup: offer to restore the previous session if the last
-    // run did not shut down cleanly and a backup exists. startup_mark_running()
-    // (top of on_init_inner) captured the previous run's crash flag before it
-    // was overwritten.
-    if (is_editor() && SessionBackup::previous_run_crashed()) {
-        if (SessionBackup::backup_exists()) {
-            // Suppress backups while the prompt is open: this run's own startup
-            // changes must not overwrite the crashed session's backup before
-            // the user has decided (a debounce timer can fire inside the modal
-            // event loop).
-            SessionBackup::set_prompt_pending(true);
-            MessageDialog dialog(nullptr,
-                format_wxstr(_L("%1% did not shut down cleanly last time.\n\n"
-                    "Restore the previous session (project and unsaved preset changes)?"), SLIC3R_APP_NAME),
-                _L("Crash recovery"), wxYES_NO | wxICON_QUESTION);
-            dialog.SetButtonLabel(wxID_YES, _L("Restore session"));
-            dialog.SetButtonLabel(wxID_NO,  _L("Discard backup"));
-            const bool restore_session = dialog.ShowModal() == wxID_YES;
-            SessionBackup::set_prompt_pending(false);
-            if (restore_session)
-                // Restore after the event loop starts, once the GUI is fully up.
-                CallAfter([]() { SessionBackup::restore(); });
-            else
-                SessionBackup::discard();
-        } else
-            // Nothing to restore: drop any stale state from the crashed run.
-            SessionBackup::discard();
-    }
+    // Crash session backup: offer to restore sessions left behind by
+    // instances that did not shut down cleanly (per-instance backups, see
+    // SessionBackup). One crashed session -> simple yes/no prompt; several ->
+    // a list with checkboxes. No-op when every instance exited cleanly.
+    if (is_editor())
+        SessionBackup::prompt_restore();
 
     if (const std::string& crash_reason = app_config->get("restore_win_position");
         boost::starts_with(crash_reason,"crashed"))
@@ -1939,9 +1917,10 @@ bool GUI_App::on_init_inner()
 
 int GUI_App::OnExit()
 {
-    // Clean shutdown: clear the crash flag and remove the session backup.
+    // Clean shutdown: remove this instance's session dir and liveness marker.
     // OnExit() is only called after the main event loop terminated normally,
-    // so a crash (which skips it) leaves the flag set for the next startup.
+    // so a crash (which skips it) leaves the marker behind for the next
+    // startup to detect.
     if (is_editor())
         SessionBackup::clean_exit();
     return wxApp::OnExit();
