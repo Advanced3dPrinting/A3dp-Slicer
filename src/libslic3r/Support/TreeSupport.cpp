@@ -140,15 +140,23 @@ static std::vector<std::pair<TreeSupportSettings, std::vector<size_t>>> group_me
     // as different settings in the same group may only occur in the tip, which uses the original settings objects from the meshes.
     for (size_t object_id : print_object_ids) {
         const PrintObject       &print_object  = *print.get_object(object_id);
-#ifndef NDEBUG
         const PrintObjectConfig &object_config = print_object.config();
-#endif // NDEBUG
         // Support must be enabled and set to Tree style.
         assert(object_config.support_material || object_config.support_material_enforce_layers > 0);
         assert(object_config.support_material_style.value == smsTree || object_config.support_material_style.value == smsOrganic);
 
         bool found_existing_group = false;
         TreeSupportSettings next_settings{ TreeSupportMeshGroupSettings{ print_object }, print_object.slicing_parameters() };
+        if (object_config.support_material_bottom_rests) {
+            // The object's bottom face rests on the model below it (support-type split at a height).
+            // Tree/organic branches must ground at the object's own bottom plane, i.e. the layer of the
+            // first non-empty slice. Branch feet then print exactly on the resting surface.
+            for (const Layer *layer : print_object.layers())
+                if (! layer->lslices().empty()) {
+                    next_settings.ground_layer_idx = size_t(layer->id()) + next_settings.raft_layers.size();
+                    break;
+                }
+        }
         //FIXME for now only a single object per group is enabled.
 #if 0
         for (size_t idx = 0; idx < grouped_meshes.size(); ++ idx)
@@ -233,6 +241,16 @@ ExPolygons to_expolys(Polygons polys) {
                  std::max(size_t(support_enforce_layers),
                           std::max(enforcers_layers.size(), enforcers_custom_facets.size())));
 
+    // If the object's bottom face rests on the model below it (support-type split at a height), the
+    // bottom face is not an overhang: the layer holding the object's first non-empty slice is skipped.
+    size_t bottom_rests_layer_id = num_overhang_layers;
+    if (config.support_material_bottom_rests.value)
+        for (size_t layer_id = 0; layer_id < num_overhang_layers; ++ layer_id)
+            if (! print_object.get_layer(layer_id)->lslices().empty()) {
+                bottom_rests_layer_id = layer_id;
+                break;
+            }
+
     assert(enforcers_custom_facets.size() == num_overhang_layers || enforcers_custom_facets.empty());
     assert(blockers_custom_facets.size() == num_overhang_layers || blockers_custom_facets.empty());
     if (enforcers_layers.empty() || enforcers_layers.size() < num_overhang_layers)
@@ -244,8 +262,12 @@ ExPolygons to_expolys(Polygons polys) {
 
     Slic3r::parallel_for(size_t(1), num_overhang_layers,
         [&print_object, &config, &print_config, &enforcers_layers, &enforcers_custom_facets, &blockers_layers, &blockers_custom_facets,
-         support_auto, support_enforce_layers, support_threshold_auto, tan_threshold, enforcer_overhang_offset, num_raft_layers, &throw_on_cancel, &out]
+         support_auto, support_enforce_layers, support_threshold_auto, tan_threshold, enforcer_overhang_offset, num_raft_layers, &throw_on_cancel, &out,
+         bottom_rests_layer_id]
         (const size_t layer_id) {
+            if (layer_id == bottom_rests_layer_id)
+                // The object's bottom face rests on the model below it: not an overhang, no support tips.
+                return;
             const Layer   &current_layer  = *print_object.get_layer(layer_id);
             const Layer   &lower_layer    = *print_object.get_layer(layer_id - 1);
             // Full overhangs with zero lower_layer_offset and no blockers applied.
@@ -977,7 +999,7 @@ public:
         validate_range(lines);
         // Add tip area as roof (happens when minimum roof area > minimum tip area) if possible
         size_t dtt_roof_tip;
-        for (dtt_roof_tip = 0; dtt_roof_tip < roof_tip_layers && insert_layer_idx - dtt_roof_tip >= 1; ++ dtt_roof_tip) {
+        for (dtt_roof_tip = 0; dtt_roof_tip < roof_tip_layers && insert_layer_idx - dtt_roof_tip > config.ground_layer_idx; ++ dtt_roof_tip) {
             size_t this_layer_idx = insert_layer_idx - dtt_roof_tip;
             auto evaluateRoofWillGenerate = [&](const std::pair<Point, LineStatus> &p) {
                 //FIXME Vojtech: The circle is just shifted, it has a known size, the infill should fit all the time!
@@ -1219,7 +1241,7 @@ void sample_overhang_area(
         // To catch these cases the added roofs are saved to be evaluated later.
         std::vector<Polygons>   added_roofs(num_support_roof_layers);
         Polygons                last_overhang = overhang_area;
-        for (dtt_roof = 0; dtt_roof < num_support_roof_layers && layer_idx - dtt_roof >= 1; ++ dtt_roof) {
+        for (dtt_roof = 0; dtt_roof < num_support_roof_layers && layer_idx - dtt_roof > config.ground_layer_idx; ++ dtt_roof) {
             // here the roof is handled. If roof can not be added the branches will try to not move instead
             Polygons forbidden_next;
             {
@@ -1297,9 +1319,10 @@ void sample_overhang_area(
         overhang_lines = convert_lines_to_internal(interface_placer.volumes, interface_placer.config, polylines, layer_idx - dtt_roof);
     }
 
-    assert(dtt_roof <= layer_idx);
-    if (dtt_roof >= layer_idx && large_horizontal_roof)
-        // Reached buildplate when generating contact, interface and base interface layers.
+    assert(dtt_roof <= layer_idx - config.ground_layer_idx);
+    if (dtt_roof >= layer_idx - config.ground_layer_idx && large_horizontal_roof)
+        // Reached the ground layer (buildplate, or the object's own bottom plane when the object
+        // rests on the model below it) when generating contact, interface and base interface layers.
         interface_placer.add_roof_build_plate(std::move(overhang_area), dtt_roof);
     else {
         // normal trees have to be generated
@@ -2541,7 +2564,10 @@ static void create_layer_pathing(const TreeModelVolumes &volumes, const TreeSupp
     size_t merge_every_x_layers = 1;
     // Calculate the influence areas for each layer below (Top down)
     // This is done by first increasing the influence area by the allowed movement distance, and merging them with other influence areas if possible
-    for (int layer_idx = int(move_bounds.size()) - 1; layer_idx > 0; -- layer_idx)
+    // Descent stops at the ground layer: layer 0 (build plate), or the object's own bottom plane when
+    // the object rests on the model below it (support_material_bottom_rests) - branches must not fall
+    // through the model below.
+    for (int layer_idx = int(move_bounds.size()) - 1; layer_idx > int(config.ground_layer_idx); -- layer_idx)
         if (SupportElements &prev_layer = move_bounds[layer_idx]; ! prev_layer.empty()) {
             // merging is expensive and only parallelized to a max speedup of 2. As such it may be useful in some cases to only merge every few layers to improve performance.
             bool had_new_element = new_element;
@@ -2771,15 +2797,18 @@ static void create_nodes_from_area(
     std::vector<SupportElements> &move_bounds,
     std::function<void()>         throw_on_cancel)
 {
-    // Initialize points on layer 0, with a "random" point in the influence area. 
+    // Initialize points on the ground layer, with a "random" point in the influence area. 
     // Point is chosen based on an inaccurate estimate where the branches will split into two, but every point inside the influence area would produce a valid result.
+    // The ground layer is layer 0 (build plate), or the object's own bottom plane when the object
+    // rests on the model below it (support_material_bottom_rests).
     {
-        SupportElements *layer_above = move_bounds.size() > 1 ? &move_bounds[1] : nullptr;
+        SupportElements &ground_layer = move_bounds[config.ground_layer_idx];
+        SupportElements *layer_above = config.ground_layer_idx + 1 < move_bounds.size() ? &move_bounds[config.ground_layer_idx + 1] : nullptr;
         if (layer_above) {
             for (SupportElement &elem : *layer_above)
                 elem.state.marked = false;
         }
-        for (SupportElement &init : move_bounds.front()) {
+        for (SupportElement &init : ground_layer) {
             init.state.result_on_layer = move_inside_if_outside(init.influence_area, init.state.next_position);
             // Also set the parent nodes, as these will be required for the first iteration of the loop below and mark the parent nodes.
             set_points_on_areas(init, layer_above);
@@ -2788,7 +2817,7 @@ static void create_nodes_from_area(
 
     throw_on_cancel();
 
-    for (LayerIndex layer_idx = 1; layer_idx < LayerIndex(move_bounds.size()); ++ layer_idx) {
+    for (LayerIndex layer_idx = LayerIndex(config.ground_layer_idx) + 1; layer_idx < LayerIndex(move_bounds.size()); ++ layer_idx) {
         auto &layer       = move_bounds[layer_idx];
         auto *layer_above = layer_idx + 1 < LayerIndex(move_bounds.size()) ? &move_bounds[layer_idx + 1] : nullptr;
         if (layer_above)
@@ -3384,7 +3413,7 @@ static void draw_areas(
             std::sort(map_downwards_old.begin(), map_downwards_old.end(), [](auto &l, auto &r) { return l.first < r.first;  });
             for (SupportElement &elem : move_bounds[layer_idx]) {
                 SupportElement *child = nullptr;
-                if (layer_idx > 0) {
+                if (layer_idx > config.ground_layer_idx) {
                     auto it = std::lower_bound(map_downwards_old.begin(), map_downwards_old.end(), &elem, [](auto &l, const SupportElement *r) { return l.first < r; });
                     if (it != map_downwards_old.end() && it->first == &elem) {
                         child = it->second;
@@ -3538,7 +3567,8 @@ static void generate_support_areas(Print &print,
         // this struct is used to easy retrieve setting. No other function except those in TreeModelVolumes and generate_initial_areas() have knowledge of the existence of multiple meshes being processed.
         //FIXME this is a copy
         // Contains config settings to avoid loading them in every function. This was done to improve readability of the code.
-        const TreeSupportSettings &config = processing.first;
+        // Local copy: the ground layer is clamped to the actual layer table size below.
+        TreeSupportSettings config = processing.first;
         BOOST_LOG_TRIVIAL(info) << "Processing support tree mesh group " << counter + 1 << " of " << grouped_meshes.size() << " containing " << grouped_meshes[counter].second.size() << " meshes.";
         auto t_start = std::chrono::high_resolution_clock::now();
 #if 0
@@ -3576,6 +3606,11 @@ static void generate_support_areas(Print &print,
         bool   has_support = num_support_layers > 0;
         bool   has_raft    = config.raft_layers.size() > 0;
         num_support_layers = std::max(num_support_layers, config.raft_layers.size());
+
+        // Clamp the ground layer into the actual layer table (an object whose overhangs all sit below
+        // the resting bottom plane has no tree layers above the ground).
+        if (config.ground_layer_idx > 0)
+            config.ground_layer_idx = std::min(config.ground_layer_idx, num_support_layers - 1);
 
         SupportParameters            support_params(print_object);
         support_params.with_sheath = true;

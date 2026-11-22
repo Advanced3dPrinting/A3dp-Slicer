@@ -361,6 +361,14 @@ public:
     // Extra raft layers below the object.
     std::vector<coordf_t> raft_layers;
 
+    /*!
+     * \brief Layer index (in this object's layer table) that tree/organic branches treat as the ground.
+     *        0 = the build plate (default). Non-zero when the object's bottom face rests on the model
+     *        below it (support_material_bottom_rests): branches ground at the object's own bottom plane
+     *        instead of descending to the build plate through free space / the model below.
+     */
+    size_t ground_layer_idx { 0 };
+
 public:
     bool operator==(const TreeSupportSettings& other) const
     {

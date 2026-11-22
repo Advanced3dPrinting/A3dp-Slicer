@@ -825,6 +825,10 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,                support_material_angle))
     ((ConfigOptionFloat,                support_material_angle_height))
     ((ConfigOptionBool,                 support_material_buildplate_only))
+    // The object's bottom face rests on the model below it (e.g. the upper half of a support-type
+    // split at a height). The bottom face is not supported, and tree/organic branches ground at the
+    // object's own bottom plane instead of descending to the build plate.
+    ((ConfigOptionBool,                 support_material_bottom_rests))
     ((ConfigOptionEnum<SupportZDistanceType>,   support_material_contact_distance_type))
     // support_material_contact_distance (PS) == support_material_contact_distance_top (SuSi 2.3 &-)
     ((ConfigOptionFloatOrPercent,       support_material_contact_distance))

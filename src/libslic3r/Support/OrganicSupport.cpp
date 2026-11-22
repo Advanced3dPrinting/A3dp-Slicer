@@ -136,7 +136,7 @@ Element to_tree_element(const TreeSupportSettings &config, const SlicingParamete
     out.radius          = support_element_radius(config, element);
     out.layer_idx       = element.state.layer_idx;
     out.influence_area  = std::move(element.influence_area);
-    out.locked          = (is_root && element.state.layer_idx > 0) || element.state.locked();
+    out.locked          = (is_root && element.state.layer_idx > config.ground_layer_idx) || element.state.locked();
     return out;
 }
 
@@ -772,7 +772,7 @@ static void organic_smooth_branches_avoid_collisions(
             element,
             link_down,
             // locked
-            element.parents.empty() || (link_down == -1 && element.state.layer_idx > 0),
+            element.parents.empty() || (link_down == -1 && element.state.layer_idx > config.ground_layer_idx),
             unscaled<float>(support_element_radius(config, element)),
             // 3D position
             to_3d(unscaled<float>(element.state.result_on_layer), float(layer_z(slicing_params, config, element.state.layer_idx)))
@@ -938,7 +938,7 @@ static void organic_smooth_branches_avoid_collisions(
         for (size_t i = 0; i < projections.size(); ++ i) {
             const SupportElement &element = *elements_with_link_down[i].first;
             const int            below    = elements_with_link_down[i].second;
-            const bool           locked   = (below == -1 && element.state.layer_idx > 0) || element.state.locked();
+            const bool           locked   = (below == -1 && element.state.layer_idx > config.ground_layer_idx) || element.state.locked();
             if (! locked && pts[i] != projections[i]) {
                 // Nudge the circle center away from the collision.
                 Vec3d v{ projections[i].x() - pts[i].x(), projections[i].y() - pts[i].y(), projections[i].z() - pts[i].z() };
@@ -1039,7 +1039,7 @@ void organic_draw_branches(
             for (size_t elem_idx = 0; elem_idx < layer.size(); ++ elem_idx) {
                 SupportElement &elem = layer[elem_idx];
                 int child = -1;
-                if (layer_idx > 0) {
+                if (layer_idx > config.ground_layer_idx) {
                     auto it = std::lower_bound(map_downwards_old.begin(), map_downwards_old.end(), &elem, [](auto& l, const SupportElement* r) { return l.first < r; });
                     if (it != map_downwards_old.end() && it->first == &elem) {
                         child = it->second;

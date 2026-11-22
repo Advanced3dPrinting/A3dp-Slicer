@@ -6412,6 +6412,18 @@ void PrintConfigDef::init_fff_params()
     def->mode = comSimpleAE | comPrusa;
     def->set_default_value(new ConfigOptionBool(false));
 
+    // Engine-internal (set automatically by the support-type-split at height). Kept per-object so it
+    // round-trips through 3MF/AMF with the object.
+    def = this->add("support_material_bottom_rests", coBool);
+    def->label = L("Bottom rests on the model below");
+    def->category = OptionCategory::support;
+    def->tooltip = L("The object's bottom face rests on the model below it (for example the upper half "
+        "of an object split for support-type-by-height). The bottom face is not treated as an overhang, "
+        "and tree/organic support branches ground at the object's own bottom plane instead of descending "
+        "to the build plate.");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("support_material_contact_distance_type", coEnum);
     def->label = L("Type");
     def->full_label = L("Support contact distance type");
