@@ -646,7 +646,13 @@ bool Bambu::test(wxString &curl_msg) const
     }
 
     // 2) MQTT control channel: connect, subscribe to the wildcard report topic,
-    //    discover the serial, then verify the request topic with get_status.
+    //    discover the serial, then verify the request topic with a status query.
+    //    Status is requested with pushing.pushall, NOT get_status: bench
+    //    192.168.50.153 (serial 00M09A381200037, verified 2026-11-22, idle
+    //    gcode_state FINISH, FTP+MQTT otherwise healthy) silently ignores
+    //    get_status entirely, while pushing.pushall ("Force the printer to
+    //    send a full update of the current state", OpenBambuAPI mqtt.md) is
+    //    always answered with a full push_status report.
     MqttTunnel mqtt;
     std::string err;
     if (! mqtt.connect(m_host, "bblp", m_access_code, err)) {
@@ -673,8 +679,9 @@ bool Bambu::test(wxString &curl_msg) const
     }
 
     {
-        // Verify the request topic with a status query.
-        const std::string req = "{\"printing\": false, \"command\": \"get_status\", \"sequence_id\": \"1\"}";
+        // Verify the request topic with a status query (pushall — see the
+        // comment above: this firmware ignores plain get_status).
+        const std::string req = "{\"pushing\": {\"command\": \"pushall\"}, \"sequence_id\": \"1\"}";
         if (! mqtt.publish("device/" + serial + "/request", req, err)) {
             curl_msg = _L("MQTT request failed: ") + wxString::FromUTF8(err);
             return false;
