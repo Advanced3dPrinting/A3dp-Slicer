@@ -691,33 +691,11 @@ void MenuFactory::append_menu_items_add_volume(MenuType menu_type)
             menu->Destroy(item_id);
     }
 
-    if (wxGetApp().get_mode() == comSimple && !get_app_config()->get_bool("objects_always_expert")) {
-        //append_menu_item_add_text(menu, ModelVolumeType::MODEL_PART, false);
-        //append_menu_item_add_text(menu, ModelVolumeType::NEGATIVE_VOLUME, false);
-
-        append_menu_item(menu, wxID_ANY, _(ADD_VOLUME_MENU_ITEMS[int(ModelVolumeType::SUPPORT_ENFORCER)].first), "",
-            [](wxCommandEvent&) { obj_list()->load_generic_subobject(L("Box"), ModelVolumeType::SUPPORT_ENFORCER); },
-            ADD_VOLUME_MENU_ITEMS[int(ModelVolumeType::SUPPORT_ENFORCER)].second, nullptr,
-            []() { return obj_list()->is_instance_or_object_selected(); }, m_parent);
-        append_menu_item(menu, wxID_ANY, _(ADD_VOLUME_MENU_ITEMS[int(ModelVolumeType::SUPPORT_BLOCKER)].first), "",
-            [](wxCommandEvent&) { obj_list()->load_generic_subobject(L("Box"), ModelVolumeType::SUPPORT_BLOCKER); },
-            ADD_VOLUME_MENU_ITEMS[int(ModelVolumeType::SUPPORT_BLOCKER)].second, nullptr,
-            []() { return obj_list()->is_instance_or_object_selected(); }, m_parent);
-        append_menu_item(menu, wxID_ANY, _(ADD_VOLUME_MENU_ITEMS[int(ModelVolumeType::SEAM_POSITION_CENTER)].first), "",
-            [this](wxCommandEvent&) { obj_list()->load_generic_subobject(L("Sphere"), ModelVolumeType::SEAM_POSITION_CENTER); },
-            ADD_VOLUME_MENU_ITEMS[int(ModelVolumeType::SEAM_POSITION_CENTER)].second, nullptr,
-            [this]() { return obj_list()->is_instance_or_object_selected(); }, m_parent);
-        append_menu_item(menu, wxID_ANY, _(ADD_VOLUME_MENU_ITEMS[int(ModelVolumeType::BRIM_PATCH)].first), "",
-            [this](wxCommandEvent&) { obj_list()->load_generic_subobject(L("Circle"), ModelVolumeType::BRIM_PATCH); },
-            ADD_VOLUME_MENU_ITEMS[int(ModelVolumeType::BRIM_PATCH)].second, nullptr,
-            [this]() { return obj_list()->is_instance_or_object_selected(); }, m_parent);
-        append_menu_item(menu, wxID_ANY, _(ADD_VOLUME_MENU_ITEMS[int(ModelVolumeType::BRIM_NEGATIVE)].first), "",
-            [this](wxCommandEvent&) { obj_list()->load_generic_subobject(L("Square"), ModelVolumeType::BRIM_NEGATIVE); },
-            ADD_VOLUME_MENU_ITEMS[int(ModelVolumeType::BRIM_NEGATIVE)].second, nullptr,
-            [this]() { return obj_list()->is_instance_or_object_selected(); }, m_parent);
-
-        return;
-    }
+    // Rob decision (t_105ae833): the add-volume section (Add part / negative /
+    // modifier / support blocker-enforcer / seam / brim) is visible in ALL UI
+    // modes, including Simple. Upstream hid most of it in Simple; we do not.
+    // "objects_always_expert" no longer gates this section; it still controls
+    // the Load/Gallery items inside the submenus and the settings popup gating.
     {
         // PART add & negative
         auto& item_add = ADD_VOLUME_MENU_ITEMS[int(ModelVolumeType::MODEL_PART)];
