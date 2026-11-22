@@ -330,8 +330,19 @@ ConflictResultOpt ConflictChecker::find_inter_of_lines_in_diff_objs(SpanOfConstP
         for (const PrintInstance& inst : obj->instances())
             instances_shifts.emplace_back(inst.shift);
 
-        conflictQueue.emplace_back_bucket(std::move(layers.first), obj, instances_shifts);
-        conflictQueue.emplace_back_bucket(std::move(layers.second), obj, instances_shifts);
+        // Support-type-by-height: the upper half of a split object shares the lower half's identity,
+        // so the checker does not report the upper half's support resting on the lower half
+        // (a by-design contact) as a g-code path conflict.
+        const void *obj_identity = obj;
+        if (obj->is_support_split() && ! obj->is_support_split_lower())
+            for (const PrintObject *o : objs)
+                if (o != obj && o->model_object() == obj->model_object() && o->is_support_split() && o->is_support_split_lower()) {
+                    obj_identity = o;
+                    break;
+                }
+
+        conflictQueue.emplace_back_bucket(std::move(layers.first), obj_identity, instances_shifts);
+        conflictQueue.emplace_back_bucket(std::move(layers.second), obj_identity, instances_shifts);
     }
     conflictQueue.build_queue();
 

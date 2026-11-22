@@ -823,9 +823,15 @@ std::pair<PrintBase::PrintValidationError, std::string> Print::validate(std::vec
         if (! print_object.has_support_material())
             return { PrintBase::PrintValidationError::pveWrongSettings,
                 format(_u8L("Object %1%: \"Switch support type at height\" requires support material to be enabled."), model_object.name) };
-        const ConfigOptionEnum<SupportMaterialStyle> *style_above_opt =
-            model_object.config.get().opt<ConfigOptionEnum<SupportMaterialStyle>>("support_material_style_above");
-        const SupportMaterialStyle style_above = style_above_opt ? style_above_opt->value : smsOrganic;
+        // Read through ConfigOptionEnum<T>::set(): the AMF/3MF loaders store enum options as
+        // ConfigOptionEnumGeneric, which a direct dynamic_cast (opt<ConfigOptionEnum<T>>) cannot see.
+        SupportMaterialStyle style_above = smsOrganic;
+        if (const ConfigOption *style_above_src =
+                model_object.config.get().option("support_material_style_above"); style_above_src) {
+            ConfigOptionEnum<SupportMaterialStyle> style_above_tmp;
+            style_above_tmp.set(*style_above_src);
+            style_above = style_above_tmp.value;
+        }
         if (style_above != smsOrganic && style_above != smsTree)
             return { PrintBase::PrintValidationError::pveWrongSettings,
                 format(_u8L("Object %1%: only tree or organic support style may be used above the switch height. Grid or snug supports ground on the build plate and cannot start at the switch height."), model_object.name) };
@@ -1456,7 +1462,7 @@ std::string Print::export_gcode(const std::string& path_template, GCodeProcessor
     std::unique_ptr<GCodeGenerator> gcode(new GCodeGenerator());
     gcode->do_export(this, path.c_str(), result, thumbnail_cb);
 
-    if (m_conflict_result.has_value())
+    if (result != nullptr && m_conflict_result.has_value())
         result->conflict_result = *m_conflict_result;
 
     return path.c_str();
