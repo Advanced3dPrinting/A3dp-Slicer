@@ -1216,6 +1216,9 @@ void sample_overhang_area(
     const coord_t                        connect_length,
     // Configuration classes
     const TreeSupportMeshGroupSettings  &mesh_group_settings,
+    // Layer index of the object's ground plane (build plate, or the object's own bottom plane
+    // when the object rests on the model below it, see TreeSupportSettings::ground_layer_idx).
+    const size_t                         ground_layer_idx,
     // Configuration & Output
     RichInterfacePlacer                 &interface_placer)
 {
@@ -1241,7 +1244,7 @@ void sample_overhang_area(
         // To catch these cases the added roofs are saved to be evaluated later.
         std::vector<Polygons>   added_roofs(num_support_roof_layers);
         Polygons                last_overhang = overhang_area;
-        for (dtt_roof = 0; dtt_roof < num_support_roof_layers && layer_idx - dtt_roof > config.ground_layer_idx; ++ dtt_roof) {
+        for (dtt_roof = 0; dtt_roof < num_support_roof_layers && layer_idx - dtt_roof > ground_layer_idx; ++ dtt_roof) {
             // here the roof is handled. If roof can not be added the branches will try to not move instead
             Polygons forbidden_next;
             {
@@ -1319,8 +1322,8 @@ void sample_overhang_area(
         overhang_lines = convert_lines_to_internal(interface_placer.volumes, interface_placer.config, polylines, layer_idx - dtt_roof);
     }
 
-    assert(dtt_roof <= layer_idx - config.ground_layer_idx);
-    if (dtt_roof >= layer_idx - config.ground_layer_idx && large_horizontal_roof)
+    assert(dtt_roof <= layer_idx - ground_layer_idx);
+    if (dtt_roof >= layer_idx - ground_layer_idx && large_horizontal_roof)
         // Reached the ground layer (buildplate, or the object's own bottom plane when the object
         // rests on the model below it) when generating contact, interface and base interface layers.
         interface_placer.add_roof_build_plate(std::move(overhang_area), dtt_roof);
@@ -1539,7 +1542,7 @@ static void generate_initial_areas(
                 //check_self_intersections(overhang_regular, "overhang_regular3");
                 for (ExPolygon &roof_part : union_ex(overhang_roofs)) {
                     sample_overhang_area(to_polygons(std::move(roof_part)), true, layer_idx, num_support_roof_layers, connect_length,
-                        mesh_group_settings, rich_interface_placer);
+                        mesh_group_settings, config.ground_layer_idx, rich_interface_placer);
                     throw_on_cancel();
                 }
             }
@@ -1550,7 +1553,7 @@ static void generate_initial_areas(
             for (ExPolygon &support_part : union_ex(overhang_regular)) {
                 sample_overhang_area(to_polygons(std::move(support_part)), 
                     false, layer_idx, num_support_roof_layers, connect_length,
-                    mesh_group_settings, rich_interface_placer);
+                    mesh_group_settings, config.ground_layer_idx, rich_interface_placer);
                 throw_on_cancel();
             }
         }
