@@ -26,6 +26,7 @@
 #include "GUI_App.hpp"
 #include "MainFrame.hpp"
 #include "format.hpp"
+#include "../Utils/Bambu.hpp"
 #include "Tab.hpp"
 #include "wxExtensions.hpp"
 #include "PrintHostDialogs.hpp"
@@ -373,7 +374,7 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
     auto print_host_test = [=](wxWindow* parent) {
         auto sizer = create_sizer_with_btn(parent, &m_printhost_test_btn, "test", _L("Test"));
 
-        m_printhost_test_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& e) {
+        m_printhost_test_btn->Bind(wxEVT_BUTTON, [this, m_optgroup](wxCommandEvent& e) {
             std::unique_ptr<PrintHost> host(PrintHost::get_print_host(m_config));
             if (!host) {
                 const wxString text = _L("Could not get a valid Printer Host reference");
@@ -397,8 +398,17 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
                     return;
                 }
             }
-            if (result)
+            if (result) {
+                // Bambu (LAN): pick up the serial discovered by the test into
+                // the (still empty) serial field.
+                if (auto* bambu = dynamic_cast<Bambu*>(host.get())) {
+                    const std::string& serial = bambu->discovered_serial();
+                    if (! serial.empty() && m_config->opt_string("printhost_serial").empty()) {
+                        m_optgroup->set_value(OptionKeyIdx::scalar("printhost_serial"), serial, true, true);
+                    }
+                }
                 show_info(this, host->get_test_ok_msg(), _L("Success!"));
+            }
             else
                 show_error(this, host->get_test_failed_msg(msg));
             });
@@ -551,6 +561,12 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
         m_optgroup->append_single_option_line(option);
     }
 
+    // Bambu (LAN): printer serial for the MQTT topics; auto-filled by Test.
+    option           = m_optgroup->create_option_from_def("printhost_serial");
+    option.opt.width = Field::def_width_wider();
+    m_optgroup->append_single_option_line(option);
+    m_optgroup->hide_field("printhost_serial");
+
 #ifdef WIN32
     option           = m_optgroup->create_option_from_def("printhost_ssl_ignore_revoke");
     option.opt.width = Field::def_width_wider();
@@ -658,6 +674,10 @@ void PhysicalPrinterDialog::update(bool printer_change)
         if (opt && opt->value == htKlipper) {
             m_optgroup->hide_field("printhost_apikey");
         }
+
+        // Bambu (LAN): show the serial field
+        if (opt)
+            m_optgroup->show_field("printhost_serial", opt->value == htBambu);
 
         // hide api key and ca file for MPMDv2
         if (opt && opt->value == htMPMDv2) {

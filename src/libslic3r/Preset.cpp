@@ -2304,7 +2304,8 @@ static std::vector<std::string> s_PhysicalPrinter_opts {
     // HTTP digest authentization (RFC 2617)
     "printhost_user",
     "printhost_password",
-    "printhost_ssl_ignore_revoke"
+    "printhost_ssl_ignore_revoke",
+    "printhost_serial"
 };
 
 const std::vector<std::string>& PhysicalPrinter::printer_options()

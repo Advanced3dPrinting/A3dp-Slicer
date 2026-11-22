@@ -8,6 +8,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <iomanip>
+#include <sstream>
 #include <thread>
 
 #include <boost/log/trivial.hpp>
@@ -121,7 +123,10 @@ public:
         if (! read_packet(connack, timeout_s * 1000, error))
             return false;
         if (connack.size() < 4 || (connack[0] & 0xF0) != 0x20) {
-            error = "unexpected reply to MQTT CONNECT";
+            std::ostringstream hex;
+            for (size_t i = 0; i < std::min(connack.size(), size_t(24)); ++i)
+                hex << (i ? " " : "") << std::hex << std::setw(2) << std::setfill('0') << (int)connack[i];
+            error = "unexpected reply to MQTT CONNECT (" + hex.str() + ") size=" + std::to_string(connack.size());
             return false;
         }
         if (connack[3] != 0) {
@@ -260,9 +265,10 @@ private:
         uint32_t multiplier = 1;
         uint32_t value = 0;
         varint_len = 0;
-        for (size_t i = pos; i < pkt.size(); ++i, ++varint_len) {
+        for (size_t i = pos; i < pkt.size(); ++i) {
             const uint8_t d = pkt[i];
             value += (uint32_t)(d & 0x7F) * multiplier;
+            varint_len = i - pos + 1;
             if ((d & 0x80) == 0) {
                 len_out = value;
                 return true;
@@ -393,9 +399,8 @@ int ftps_progress_cb(void *userdata, curl_off_t, curl_off_t, curl_off_t ultotal,
 {
     FtpsCtx *ctx = static_cast<FtpsCtx*>(userdata);
     if (ctx->progress_fn) {
-        Http::Progress progress;
-        progress.ultotal = ultotal;
-        progress.ulnow   = ulnow;
+        static const std::string empty_buffer;
+        Http::Progress progress(0, 0, size_t(ultotal), size_t(ulnow), empty_buffer);
         bool cancel = false;
         ctx->progress_fn(progress, cancel);
         if (cancel)
@@ -480,7 +485,7 @@ bool ftps_upload_file(const std::string &host, const std::string &user, const st
         url = std::string("ftps://") + host + ":990/cache/" + remote_name;
 
     std::vector<char> errbuf;
-    curl = ftps_handle(host, user, password, url);
+    curl = ftps_handle(host, user, password, url, errbuf);
     if (! curl) {
         fclose(f);
         error = "curl init failed";
@@ -675,12 +680,18 @@ bool Bambu::test(wxString &curl_msg) const
             return false;
         }
         bool status_ok = false;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
         while (std::chrono::steady_clock::now() < deadline) {
             std::string topic, payload;
             std::string err2;
-            if (! mqtt.wait_publish(topic, payload, 2000, err2))
-                break;
+            // Keep draining until the deadline: the printer interleaves
+            // unsolicited keepalives with the status answer, and a single
+            // short recv window can miss the reply entirely.
+            if (! mqtt.wait_publish(topic, payload, 1500, err2)) {
+                if (! mqtt.connected())
+                    break;
+                continue;
+            }
             pt::ptree report;
             if (parse_report(payload, "print", report) && ! report.empty()) {
                 status_ok = true;
@@ -695,6 +706,7 @@ bool Bambu::test(wxString &curl_msg) const
     }
 
     m_serial = serial;
+    curl_msg = get_test_ok_msg();
     return true;
 }
 
@@ -835,8 +847,7 @@ bool Bambu::upload(PrintHostUpload upload_data, ProgressFn progress_fn, ErrorFn 
         return true;
     }
     if (acked) {
-        error_fn(_L("The printer rejected the print start (reason: %s). The file is in the printer's cache; start it from the printer screen.")
-            % wxString::FromUTF8(reason));
+        error_fn(wxString::Format(_L("The printer rejected the print start (reason: %s). The file is in the printer's cache; start it from the printer screen."), wxString::FromUTF8(reason)));
         return false;
     }
     error_fn(_L("No acknowledgement from the printer after the print start command. The file is in the printer's cache; start it from the printer screen."));
