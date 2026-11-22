@@ -466,7 +466,10 @@ GCodeGenerator::ObjectsLayerToPrint GCodeGenerator::collect_layers_to_print(cons
 
         // Check that there are extrusions on the very first layer. The case with empty
         // first layer may result in skirt/brim in the air and maybe other issues.
-        if (layers_to_print.size() == 1u && !object.print()->config().allow_empty_layers.value) {
+        // Support-type-by-height: the upper half of a split object starts at the switch height
+        // and legitimately has no extrusions at the print's first layer; the lower half covers it.
+        if (layers_to_print.size() == 1u && !object.print()->config().allow_empty_layers.value &&
+            ! (object.is_support_split() && ! object.is_support_split_lower())) {
             if (!has_extrusions)
                 throw Slic3r::SlicingError(_u8L("There is an object with no extrusions in the first layer.") + "\n" +
                                            _u8L("Object name") + ": " + object.model_object()->name);
