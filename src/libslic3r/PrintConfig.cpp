@@ -143,6 +143,7 @@ static const t_config_enum_values s_keys_map_PrintHostType {
     {"mpmdv2",          htMPMDv2},
     { "mks",            htMKS },
     {"monoprice",       htMiniDeltaLCD },
+    { "bambu",          htBambu },
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(PrintHostType)
 
@@ -613,6 +614,17 @@ void PrintConfigDef::init_common_params()
     def = this->add("printhost_user", coString);
     def->label = L("User");
 //    def->tooltip = L("");
+    def->mode = comAdvancedE | comPrusa;
+    def->cli = ConfigOptionDef::nocli;
+    def->set_default_value(new ConfigOptionString(""));
+
+    // For Bambu (LAN): printer serial number for the MQTT topics
+    // device/{serial}/request and device/{serial}/report. Discovered
+    // automatically with the Test button; may be entered manually.
+    def = this->add("printhost_serial", coString);
+    def->label = L("Serial number");
+    def->tooltip = L("Printer serial number, used for the MQTT control topics. "
+                   "Leave empty and press Test to discover it automatically.");
     def->mode = comAdvancedE | comPrusa;
     def->cli = ConfigOptionDef::nocli;
     def->set_default_value(new ConfigOptionString(""));
@@ -4461,6 +4473,7 @@ void PrintConfigDef::init_fff_params()
         { "mpmdv2",         "MPMDv2" },
         { "mks",            "MKS" },
         { "monoprice",      "Monoprice lcd" },
+        { "bambu",          "Bambu (LAN)" },
     });
     def->mode = comAdvancedE | comPrusa;
     def->cli = ConfigOptionDef::nocli;
