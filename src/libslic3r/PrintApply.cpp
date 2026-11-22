@@ -400,8 +400,9 @@ struct PrintObjectStatus {
         id(print_object->model_object()->id()),
         print_object(print_object),
         trafo(print_object->trafo()),
+        split_part(print_object->is_support_split() ? (print_object->is_support_split_lower() ? 0 : 1) : -1),
         status(status) {}
-    PrintObjectStatus(ObjectID id) : id(id), print_object(nullptr), trafo(Transform3d::Identity()), status(Unknown) {}
+    PrintObjectStatus(ObjectID id) : id(id), print_object(nullptr), trafo(Transform3d::Identity()), split_part(-1), status(Unknown) {}
 
     // ID of the ModelObject & PrintObject
     ObjectID         id;
@@ -409,6 +410,8 @@ struct PrintObjectStatus {
     PrintObject     *print_object;
     // Trafo generated with model_object->world_matrix(true) 
     Transform3d      trafo;
+    // Support-type-by-height split part: -1 = not split, 0 = lower half, 1 = upper half.
+    int              split_part;
     Status           status;
 
     // Search by id.
@@ -1261,11 +1264,25 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
             if (! object_diff.empty() || object_config_changed || num_extruders_changed) {
                 PrintObjectConfig new_config = PrintObject::object_config_from_model_object(m_default_object_config, model_object, num_extruders);
                 for (const PrintObjectStatus &print_object_status : print_object_status_db.get_range(model_object)) {
-                    t_config_option_keys diff = print_object_status.print_object->config().diff(new_config);
-                    if (! diff.empty()) {
-                        update_apply_status(print_object_status.print_object->invalidate_state_by_config_options(print_object_status.print_object->config(), new_config, diff));
-                        print_object_status.print_object->config_apply_only(new_config, diff, true);
+                    PrintObject *print_object = print_object_status.print_object;
+                    const bool split_upper = print_object->is_support_split() && ! print_object->is_support_split_lower();
+                    t_config_option_keys diff = print_object->config().diff(new_config);
+                    if (split_upper) {
+                        // The upper half of a support-type split carries per-half config overrides
+                        // (support style above the switch height, bottom face resting on the lower
+                        // half), which differ from the model config by design: keep them out of step
+                        // invalidation and re-apply them after the config sync below.
+                        diff.erase(std::remove(diff.begin(), diff.end(), "support_material_style"), diff.end());
+                        diff.erase(std::remove(diff.begin(), diff.end(), "support_material_bottom_rests"), diff.end());
                     }
+                    if (! diff.empty()) {
+                        update_apply_status(print_object->invalidate_state_by_config_options(print_object->config(), new_config, diff));
+                        print_object->config_apply_only(new_config, diff, true);
+                    }
+                    // Refresh the support-type split state (the switch height may have changed).
+                    print_object->update_support_split_z(model_object);
+                    if (split_upper)
+                        print_object->apply_support_split_overrides();
                 }
             }
             // Synchronize (just copy) the remaining data of ModelVolumes (name, config, custom supports data).
@@ -1333,39 +1350,79 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
             };
             if (old.empty()) {
                 // Simple case, just generate new instances.
+                // Support-type-by-height (support_material_style_switch_height > 0): each (ModelObject,
+                // trafo) group is sliced as two PrintObjects - the part below the switch height and the
+                // part above it - so each half can run its own support engine. The model on the plater
+                // is not modified; the split happens in the background at every Print::apply.
+                const double support_split_z = model_object->config.has("support_material_style_switch_height") ?
+                    model_object->config.opt_float("support_material_style_switch_height") : 0.;
                 for (PrintObjectTrafoAndInstances &print_instances : model_object_status.print_instances) {
-                    PrintObject *print_object = new PrintObject(this, model_object, print_instances.trafo, std::move(print_instances.instances));
-                    print_object_apply_config(print_object);
-                    print_objects_new.emplace_back(print_object);
-                    // print_object_status.emplace(PrintObjectStatus(print_object, PrintObjectStatus::New));
-                    new_objects = true;
+                    if (support_split_z <= 0.) {
+                        PrintObject *print_object = new PrintObject(this, model_object, print_instances.trafo, std::move(print_instances.instances));
+                        print_object_apply_config(print_object);
+                        print_objects_new.emplace_back(print_object);
+                        // print_object_status.emplace(PrintObjectStatus(print_object, PrintObjectStatus::New));
+                        new_objects = true;
+                    } else {
+                        // Lower half: below the switch height, style per "support_material_style".
+                        PrintInstances instances_lower = print_instances.instances;
+                        PrintObject *print_object_lower = new PrintObject(this, model_object, print_instances.trafo, std::move(instances_lower));
+                        print_object_apply_config(print_object_lower);
+                        print_object_lower->set_support_split(true, support_split_z);
+                        print_objects_new.emplace_back(print_object_lower);
+                        // Upper half: above the switch height, style per "support_material_style_above",
+                        // bottom face resting on the lower half (its bottom face is not an overhang to
+                        // support and tree/organic branches ground at the seam plane).
+                        PrintObject *print_object_upper = new PrintObject(this, model_object, print_instances.trafo, std::move(print_instances.instances));
+                        print_object_apply_config(print_object_upper);
+                        print_object_upper->set_support_split(false, support_split_z);
+                        print_object_upper->apply_support_split_overrides();
+                        print_objects_new.emplace_back(print_object_upper);
+                        // print_object_status.emplace(PrintObjectStatus(print_object, PrintObjectStatus::New));
+                        new_objects = true;
+                    }
                 }
                 continue;
             }
             // Complex case, try to merge the two lists.
-            // Sort the old lexicographically by their trafos.
-            std::sort(old.begin(), old.end(), [](const PrintObjectStatus *lhs, const PrintObjectStatus *rhs){ return transform3d_lower(lhs->trafo, rhs->trafo); });
+            // Sort the old lexicographically by their trafos, then by the support-type split part
+            // (with support-type-by-height, a ModelObject appears as two PrintObjects with the same trafo).
+            std::sort(old.begin(), old.end(), [](const PrintObjectStatus *lhs, const PrintObjectStatus *rhs){ return transform3d_lower(lhs->trafo, rhs->trafo) ||
+                (! transform3d_lower(rhs->trafo, lhs->trafo) && lhs->split_part < rhs->split_part); });
             // Merge the old / new lists.
+            const int num_split_parts = model_object->config.has("support_material_style_switch_height") &&
+                model_object->config.opt_float("support_material_style_switch_height") > 0. ? 2 : 1;
             auto it_old = old.begin();
             for (PrintObjectTrafoAndInstances &new_instances : model_object_status.print_instances) {
-				for (; it_old != old.end() && transform3d_lower((*it_old)->trafo, new_instances.trafo); ++ it_old);
-				if (it_old == old.end() || ! transform3d_equal((*it_old)->trafo, new_instances.trafo)) {
-                    // This is a new instance (or a set of instances with the same trafo). Just add it.
-                    PrintObject *print_object = new PrintObject(this, model_object, new_instances.trafo, std::move(new_instances.instances));
-                    print_object_apply_config(print_object);
-                    print_objects_new.emplace_back(print_object);
-                    // print_object_status.emplace(PrintObjectStatus(print_object, PrintObjectStatus::New));
-                    new_objects = true;
-                    if (it_old != old.end())
-                        const_cast<PrintObjectStatus*>(*it_old)->status = PrintObjectStatus::Deleted;
-                } else {
-                    // The PrintObject already exists and the copies differ.
-					PrintBase::ApplyStatus status = (*it_old)->print_object->set_instances(std::move(new_instances.instances));
-                    if (status != PrintBase::APPLY_STATUS_UNCHANGED)
-						update_apply_status(status == PrintBase::APPLY_STATUS_INVALIDATED);
-					print_objects_new.emplace_back((*it_old)->print_object);
-					const_cast<PrintObjectStatus*>(*it_old)->status = PrintObjectStatus::Reused;
-				}
+                for (int new_part = 0; new_part < num_split_parts; ++ new_part) {
+                    const int new_split_part = num_split_parts == 2 ? new_part : -1;
+                    for (; it_old != old.end() && (transform3d_lower((*it_old)->trafo, new_instances.trafo) ||
+                        (transform3d_equal((*it_old)->trafo, new_instances.trafo) && (*it_old)->split_part < new_split_part)); ++ it_old);
+                    if (it_old == old.end() || ! transform3d_equal((*it_old)->trafo, new_instances.trafo) || (*it_old)->split_part != new_split_part) {
+                        // This is a new instance (or a new half of a support-type split object). Just add it.
+                        PrintObject *print_object = new PrintObject(this, model_object, new_instances.trafo,
+                            new_split_part == -1 ? std::move(new_instances.instances) : PrintInstances(new_instances.instances));
+                        print_object_apply_config(print_object);
+                        if (num_split_parts == 2) {
+                            print_object->set_support_split(new_split_part == 0, model_object->config.opt_float("support_material_style_switch_height"));
+                            if (new_split_part == 1)
+                                print_object->apply_support_split_overrides();
+                        }
+                        print_objects_new.emplace_back(print_object);
+                        // print_object_status.emplace(PrintObjectStatus(print_object, PrintObjectStatus::New));
+                        new_objects = true;
+                        if (it_old != old.end())
+                            const_cast<PrintObjectStatus*>(*it_old)->status = PrintObjectStatus::Deleted;
+                    } else {
+                        // The PrintObject already exists and the copies differ.
+                        PrintBase::ApplyStatus status = (*it_old)->print_object->set_instances(
+                            new_split_part == -1 ? std::move(new_instances.instances) : PrintInstances(new_instances.instances));
+                        if (status != PrintBase::APPLY_STATUS_UNCHANGED)
+                            update_apply_status(status == PrintBase::APPLY_STATUS_INVALIDATED);
+                        print_objects_new.emplace_back((*it_old)->print_object);
+                        const_cast<PrintObjectStatus*>(*it_old)->status = PrintObjectStatus::Reused;
+                    }
+                }
             }
         }
         if (m_objects != print_objects_new) {

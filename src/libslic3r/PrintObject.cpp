@@ -1493,6 +1493,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "support_material_interface_spacing"
             || opt_key == "support_material_pattern"
             || opt_key == "support_material_style"
+            || opt_key == "support_material_style_above"
             || opt_key == "support_material_top_interface_pattern"
             || opt_key == "support_material_xy_spacing"
             || opt_key == "support_material_spacing"
@@ -1500,6 +1501,10 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "support_material_synchronize_layers"
             || opt_key == "support_material_threshold"
             || opt_key == "support_material_with_sheath") {
+            steps.emplace_back(posSupportMaterial);
+        } else if (opt_key == "support_material_style_switch_height") {
+            // Support-type-by-height: changing the switch height re-slices the object.
+            steps.emplace_back(posSlice);
             steps.emplace_back(posSupportMaterial);
         } else if (opt_key == "bottom_solid_layers") {
             steps.emplace_back(posPrepareInfill);
@@ -4361,6 +4366,18 @@ void PrintObject::update_slicing_parameters()
     if (!m_slicing_params || !m_slicing_params->valid)
         m_slicing_params = SlicingParameters::create_from_config(
             this->print()->config(), m_config, this->print()->default_region_config(), this->model_object()->max_z()/*bounding_box().max.z()*/, this->object_extruders());
+}
+
+void PrintObject::update_support_split_z(const ModelObject &model_object)
+{
+    // Refresh the support-type-by-height split height from the (possibly updated) ModelObject config.
+    // The lower/upper half identity is kept; it is assigned once at PrintObject creation.
+    double z = 0.;
+    if (model_object.config.has("support_material_style_switch_height"))
+        z = model_object.config.opt_float("support_material_style_switch_height");
+    m_support_split_z = (z > 0.) ? z : 0.;
+    if (m_support_split_z == 0.)
+        m_support_split_lower = false;
 }
 
 std::shared_ptr<SlicingParameters> PrintObject::slicing_parameters(const DynamicPrintConfig& full_config, const ModelObject& model_object, float object_max_z)

@@ -6762,6 +6762,35 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvancedE | comPrusa;
     def->set_default_value(new ConfigOptionEnum<SupportMaterialStyle>(smsGrid));
 
+    def = this->add("support_material_style_above", coEnum);
+    def->label = L("Style above switch height");
+    def->full_label = L("Support style above the switch height");
+    def->category = OptionCategory::support;
+    def->tooltip = L("Support style used above the \"Switch support type at height\". Only organic (or tree) "
+        "works above the switch height, because the branches must ground on the lower part's top surface "
+        "or on its supports; grid/snug columns above the switch height would try to reach the build plate "
+        "straight through the model. The style below the switch height is \"Style\" (support material style).");
+    def->set_enum<SupportMaterialStyle>({
+        { "grid", L("Grid") }, 
+        { "snug", L("Snug") },
+        { "organic", L("Organic") }
+    });
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionEnum<SupportMaterialStyle>(smsOrganic));
+
+    def = this->add("support_material_style_switch_height", coFloat);
+    def->label = L("Switch support type at height");
+    def->full_label = L("Switch support type at height");
+    def->category = OptionCategory::support;
+    def->tooltip = L("Automatically split the object at this height when slicing and switch the support type: "
+        "\"Style\" is used below the height, \"Style above switch height\" above it. The object on the bed is "
+        "not modified - the split happens in the background at every slice. Only organic/tree above plus "
+        "grid/snug below is supported (tree branches ground on the lower part, grid columns cannot). "
+        "Set to 0 to disable.");
+    def->min = 0;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0));
+
     def = this->add("support_material_synchronize_layers", coBool);
     def->label = L("Synchronize with object layers");
     def->category = OptionCategory::support;

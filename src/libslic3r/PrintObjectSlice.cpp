@@ -1639,6 +1639,16 @@ void PrintObject::slice_volumes()
         slice_zs,
         throw_on_cancel_callback);
 
+    if (this->is_support_split()) {
+        // Support-type-by-height: this PrintObject holds only the object's slices below (lower half)
+        // or above (upper half) the switch height. Slice planes exactly at the switch height belong
+        // to the lower half, so the halves weld at the seam.
+        for (VolumeSlices &volume_slice : volume_slices)
+            for (size_t i = 0; i < volume_slice.slices.size() && i < slice_zs.size(); ++ i)
+                if (! this->in_support_split_range(slice_zs[i]))
+                    volume_slice.slices[i].clear();
+    }
+
     std::vector<std::vector<ExPolygons>> region_slices = slices_to_regions(
         print->config(),
         *this,
@@ -1939,6 +1949,11 @@ std::vector<ExPolygons> PrintObject::slice_support_volumes(const ModelVolumeType
             });
         }
     }
+    if (this->is_support_split())
+        // Support-type-by-height: enforcers/blockers only apply to this half of the split object.
+        for (size_t i = 0; i < slices.size() && i < zs.size(); ++ i)
+            if (! this->in_support_split_range(zs[i]))
+                slices[i].clear();
     return slices;
 }
 

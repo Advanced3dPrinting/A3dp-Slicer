@@ -808,6 +808,38 @@ std::pair<PrintBase::PrintValidationError, std::string> Print::validate(std::vec
         }
     }
 
+    // Support-type-by-height ("Switch support type at height"): validate the combination.
+    // Each split ModelObject is validated once (the upper split half shares the ModelObject config).
+    for (size_t print_object_idx = 0; print_object_idx < m_objects.size(); ++ print_object_idx) {
+        const PrintObject &print_object = *m_objects[print_object_idx];
+        if (print_object.is_support_split() && ! print_object.is_support_split_lower())
+            continue;
+        const ModelObject &model_object = *print_object.model_object();
+        if (! model_object.config.has("support_material_style_switch_height"))
+            continue;
+        const double switch_height = model_object.config.opt_float("support_material_style_switch_height");
+        if (switch_height <= 0.)
+            continue;
+        if (! print_object.has_support_material())
+            return { PrintBase::PrintValidationError::pveWrongSettings,
+                format(_u8L("Object %1%: \"Switch support type at height\" requires support material to be enabled."), model_object.name) };
+        const ConfigOptionEnum<SupportMaterialStyle> *style_above_opt =
+            model_object.config.option<ConfigOptionEnum<SupportMaterialStyle>>("support_material_style_above");
+        const SupportMaterialStyle style_above = style_above_opt ? style_above_opt->value : smsOrganic;
+        if (style_above != smsOrganic && style_above != smsTree)
+            return { PrintBase::PrintValidationError::pveWrongSettings,
+                format(_u8L("Object %1%: only tree or organic support style may be used above the switch height. Grid or snug supports ground on the build plate and cannot start at the switch height."), model_object.name) };
+        if (model_object.config.opt_bool("support_material_buildplate_only"))
+            return { PrintBase::PrintValidationError::pveWrongSettings,
+                format(_u8L("Object %1%: \"Switch support type at height\" is not compatible with \"Support on build plate only\". The supports above the switch height ground on the part below it."), model_object.name) };
+        if (print_object.slicing_parameters().raft_layers > 0)
+            return { PrintBase::PrintValidationError::pveWrongSettings,
+                format(_u8L("Object %1%: \"Switch support type at height\" is not compatible with a raft."), model_object.name) };
+        if (switch_height >= model_object.max_z() - EPSILON)
+            return { PrintBase::PrintValidationError::pveWrongSettings,
+                format(_u8L("Object %1%: \"Switch support type at height\" must be lower than the object height."), model_object.name) };
+    }
+
     // Some of the objects has variable layer height applied by painting or by a table.
     bool has_custom_layering = std::find_if(m_objects.begin(), m_objects.end(), 
         [](const PrintObject *object) { return object->model_object()->has_custom_layering(); }) 

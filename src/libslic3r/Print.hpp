@@ -429,6 +429,29 @@ protected:
 
     void                    config_apply(const ConfigBase &other, bool ignore_nonexistent = false) { m_config.apply(other, ignore_nonexistent); }
     void                    config_apply_only(const ConfigBase &other, const t_config_option_keys &keys, bool ignore_nonexistent = false) { m_config.apply_only(other, keys, ignore_nonexistent); }
+
+    // Support-type-by-height (support_material_style_switch_height > 0): the object is split at that
+    // print z at slice time into two PrintObjects. This one holds either the part below the switch
+    // height (m_support_split_lower) or above it. The split z is not stored in m_config (the upper
+    // half's per-half config overrides would fight the PrintObject config synchronization in
+    // Print::apply); it is refreshed from the ModelObject config by update_support_split().
+    bool                    is_support_split() const { return m_support_split_z > 0.; }
+    bool                    is_support_split_lower() const { return m_support_split_lower; }
+    double                  support_split_z() const { return m_support_split_z; }
+    // True if the slice plane belongs to this half of a support-type split. The plane exactly at the
+    // switch height belongs to the lower half (the cut plane is the lower part's top face).
+    bool                    in_support_split_range(double slice_z) const
+        { return ! this->is_support_split() || (m_support_split_lower ? slice_z <= m_support_split_z + EPSILON : slice_z > m_support_split_z + EPSILON); }
+    void                    set_support_split(bool lower, double z) { m_support_split_lower = lower; m_support_split_z = z; }
+    void                    update_support_split_z(const ModelObject &model_object);
+    // For Print::apply: re-apply the upper half's per-half config overrides (support style above the
+    // switch height, bottom face resting on the lower half) after the config has been synchronized
+    // from the ModelObject config.
+    void                    apply_support_split_overrides()
+    {
+        m_config.support_material_style.value          = m_config.support_material_style_above.value;
+        m_config.support_material_bottom_rests.value   = true;
+    }
     PrintBase::ApplyStatus  set_instances(PrintInstances &&instances);
     // Invalidates the step, and its depending steps in PrintObject and Print.
     bool                    invalidate_step(PrintObjectStep step);
@@ -517,6 +540,10 @@ private:
     std::pair<FillAdaptive::OctreePtr, FillAdaptive::OctreePtr> m_adaptive_fill_octrees;
     // filled by prepare_lightning_infill_data() (in bridge_over_infill() in prepare_infill()) and used in infill()
     FillLightning::GeneratorPtr m_lightning_generator;
+
+    // Support-type-by-height split state (see is_support_split() above).
+    bool                    m_support_split_lower { false };
+    double                  m_support_split_z     { 0. };
 };
 
 

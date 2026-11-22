@@ -856,6 +856,10 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,                support_material_spacing))
     ((ConfigOptionFloatOrPercent,       support_material_speed))
     ((ConfigOptionEnum<SupportMaterialStyle>, support_material_style))
+    // Support-type-by-height: when support_material_style_switch_height > 0, the object is split at
+    // that print z at slice time; support_material_style applies below it, support_material_style_above above.
+    ((ConfigOptionEnum<SupportMaterialStyle>, support_material_style_above))
+    ((ConfigOptionFloat,                support_material_style_switch_height))
     ((ConfigOptionBool,                 support_material_synchronize_layers))
     // Overhang angle threshold.
     ((ConfigOptionInt,                  support_material_threshold))
