@@ -829,7 +829,8 @@ std::pair<PrintBase::PrintValidationError, std::string> Print::validate(std::vec
         if (style_above != smsOrganic && style_above != smsTree)
             return { PrintBase::PrintValidationError::pveWrongSettings,
                 format(_u8L("Object %1%: only tree or organic support style may be used above the switch height. Grid or snug supports ground on the build plate and cannot start at the switch height."), model_object.name) };
-        if (model_object.config.get().opt_bool("support_material_buildplate_only"))
+        if (model_object.config.has("support_material_buildplate_only") &&
+            model_object.config.get().opt_bool("support_material_buildplate_only"))
             return { PrintBase::PrintValidationError::pveWrongSettings,
                 format(_u8L("Object %1%: \"Switch support type at height\" is not compatible with \"Support on build plate only\". The supports above the switch height ground on the part below it."), model_object.name) };
         if (print_object.slicing_parameters().raft_layers() > 0)
