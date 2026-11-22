@@ -414,27 +414,11 @@ public:
     const ExtrusionEntityCollection& skirt() const { return m_skirt; }
     const ExtrusionEntityCollection& brim() const { return m_brim; }
 
-protected:
-    // to be called from Print only.
-    friend class Print;
-    friend class PrintBaseWithState<PrintStep, psCount>;
-
-	PrintObject(Print* print, ModelObject* model_object, const Transform3d& trafo, PrintInstances&& instances);
-    ~PrintObject() override {
-        if (m_shared_regions && --m_shared_regions->m_ref_cnt == 0)
-            delete m_shared_regions;
-        clear_layers();
-        clear_support_layers();
-    }
-
-    void                    config_apply(const ConfigBase &other, bool ignore_nonexistent = false) { m_config.apply(other, ignore_nonexistent); }
-    void                    config_apply_only(const ConfigBase &other, const t_config_option_keys &keys, bool ignore_nonexistent = false) { m_config.apply_only(other, keys, ignore_nonexistent); }
-
     // Support-type-by-height (support_material_style_switch_height > 0): the object is split at that
     // print z at slice time into two PrintObjects. This one holds either the part below the switch
     // height (m_support_split_lower) or above it. The split z is not stored in m_config (the upper
     // half's per-half config overrides would fight the PrintObject config synchronization in
-    // Print::apply); it is refreshed from the ModelObject config by update_support_split().
+    // Print::apply); it is refreshed from the ModelObject config by update_support_split_z().
     bool                    is_support_split() const { return m_support_split_z > 0.; }
     bool                    is_support_split_lower() const { return m_support_split_lower; }
     double                  support_split_z() const { return m_support_split_z; }
@@ -452,6 +436,22 @@ protected:
         m_config.support_material_style.value          = m_config.support_material_style_above.value;
         m_config.support_material_bottom_rests.value   = true;
     }
+
+protected:
+    // to be called from Print only.
+    friend class Print;
+    friend class PrintBaseWithState<PrintStep, psCount>;
+
+	PrintObject(Print* print, ModelObject* model_object, const Transform3d& trafo, PrintInstances&& instances);
+    ~PrintObject() override {
+        if (m_shared_regions && --m_shared_regions->m_ref_cnt == 0)
+            delete m_shared_regions;
+        clear_layers();
+        clear_support_layers();
+    }
+
+    void                    config_apply(const ConfigBase &other, bool ignore_nonexistent = false) { m_config.apply(other, ignore_nonexistent); }
+    void                    config_apply_only(const ConfigBase &other, const t_config_option_keys &keys, bool ignore_nonexistent = false) { m_config.apply_only(other, keys, ignore_nonexistent); }
     PrintBase::ApplyStatus  set_instances(PrintInstances &&instances);
     // Invalidates the step, and its depending steps in PrintObject and Print.
     bool                    invalidate_step(PrintObjectStep step);

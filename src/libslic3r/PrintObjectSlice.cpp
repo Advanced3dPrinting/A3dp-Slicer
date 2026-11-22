@@ -1949,11 +1949,14 @@ std::vector<ExPolygons> PrintObject::slice_support_volumes(const ModelVolumeType
             });
         }
     }
-    if (this->is_support_split())
+    if (this->is_support_split()) {
         // Support-type-by-height: enforcers/blockers only apply to this half of the split object.
+        // The z list is recomputed here (the one above is scoped to the volume-slicing block).
+        const std::vector<float> zs = zs_from_layers(this->layers());
         for (size_t i = 0; i < slices.size() && i < zs.size(); ++ i)
             if (! this->in_support_split_range(zs[i]))
                 slices[i].clear();
+    }
     return slices;
 }
 
