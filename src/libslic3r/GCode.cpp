@@ -426,17 +426,11 @@ GCodeGenerator::ObjectsLayerToPrint GCodeGenerator::collect_layers_to_print(cons
 
     std::vector<std::pair<double, double>> warning_ranges;
 
-    //check for max nozzle diameter
-    const std::vector<double>& nozzle_diameters = object.print()->config().nozzle_diameter.get_values();
-    std::set<uint16_t> exctruder_ids = object.object_extruders();
-    double max_nozzle = 0;
-    for (uint16_t id : exctruder_ids) {
-        max_nozzle = std::max(max_nozzle, nozzle_diameters[id]);
-    }
-    if (max_nozzle == 0)
-        max_nozzle = nozzle_diameters.front();
-    double top_cd = object.config().support_material_contact_distance.get_abs_value(max_nozzle);
-    double bottom_cd = object.config().support_material_bottom_contact_distance.value == 0. ? top_cd : object.config().support_material_bottom_contact_distance.get_abs_value(max_nozzle);
+    // Resolve contact distances against the same effective layer height used by the support
+    // generator (SlicingParameters.layer_height, z-step aligned), so a % value and the
+    // equivalent mm value produce identical support geometry.
+    double top_cd = object.config().support_material_contact_distance.get_abs_value(object.slicing_parameters().layer_height);
+    double bottom_cd = object.config().support_material_bottom_contact_distance.value == 0. ? top_cd : object.config().support_material_bottom_contact_distance.get_abs_value(object.slicing_parameters().layer_height);
     double raft_cd = object.config().raft_contact_distance.value;
 
     // Pair the object layers with the support layers by z.

@@ -6435,9 +6435,9 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("The vertical distance between support material interface and the object"
         "(when the object is printed on top of the support). "
         "Setting this to 0 will also prevent Slic3r from using bridge flow and speed "
-        "for the first object layer. Can be a % of the nozzle diameter.");
-    def->ratio_over = "nozzle_diameter";
-    def->sidetext = L("mm");
+        "for the first object layer. Can be a % of the layer height (e.g. '50%' = half of the layer height).");
+    def->ratio_over = "layer_height";
+    def->sidetext = L("mm or %");
     def->min = 0;
     def->max_literal = { 20, true };
     def->mode = comAdvancedE | comPrusa;
@@ -6449,10 +6449,10 @@ void PrintConfigDef::init_fff_params()
     def->full_label = L("Contact distance under the bottom of supports");
     def->category = OptionCategory::support;
     def->tooltip = L("The vertical distance between object and support material interface"
-        "(when the support is printed on top of the object). Can be a % of the nozzle diameter."
+        "(when the support is printed on top of the object). Can be a % of the layer height (e.g. '50%' = half of the layer height)."
         "\nIf set to zero, support_material_contact_distance will be used for both top and bottom contact Z distances.");
-    def->ratio_over = "nozzle_diameter";
-    def->sidetext = L("mm");
+    def->ratio_over = "layer_height";
+    def->sidetext = L("mm or %");
     def->set_enum_values(ConfigOptionDef::GUIType::f_enum_open, {
     //TRN Print Settings: "Bottom contact Z distance". Have to be as short as possible
         { "0",      L("Same as top") },
@@ -10938,7 +10938,7 @@ std::map<std::string, std::string> PrintConfigDef::to_prusa(t_config_option_key&
             if (SupportZDistanceType::zdNone == dist_type) {
                 value = "0";
             } else {
-                double val = all_conf.option<ConfigOptionFloatOrPercent>("support_material_contact_distance_top")->get_abs_value(all_conf.option<ConfigOptionFloats>("nozzle_diameter")->get_at(0));
+                double val = all_conf.option<ConfigOptionFloatOrPercent>("support_material_contact_distance_top")->get_abs_value(all_conf.get_computed_value("layer_height", 0));
                 if (SupportZDistanceType::zdFilament == dist_type) { // not exact but good enough effort
                     val += all_conf.option<ConfigOptionFloats>("nozzle_diameter")->get_at(0);
                     val -= all_conf.get_computed_value("layer_height", 0);
@@ -10958,7 +10958,7 @@ std::map<std::string, std::string> PrintConfigDef::to_prusa(t_config_option_key&
                 if (SupportZDistanceType::zdNone == dist_type) {
                     value = "0";
                 } else {
-                    double val = all_conf.option<ConfigOptionFloatOrPercent>("support_material_contact_distance_bottom")->get_abs_value(all_conf.option<ConfigOptionFloats>("nozzle_diameter")->get_at(0));
+                    double val = all_conf.option<ConfigOptionFloatOrPercent>("support_material_contact_distance_bottom")->get_abs_value(all_conf.get_computed_value("layer_height", 0));
                     if (SupportZDistanceType::zdFilament == dist_type) { // not exact but good enough effort
                         val += all_conf.option<ConfigOptionFloats>("nozzle_diameter")->get_at(0);
                         val -= all_conf.get_computed_value("layer_height", 0);

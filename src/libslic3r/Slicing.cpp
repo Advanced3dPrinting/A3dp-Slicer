@@ -265,9 +265,10 @@ std::shared_ptr<SlicingParameters> SlicingParameters::create_from_config(
     }
 
     if (!soluble_interface) {
-        params.gap_object_support = object_config.support_material_bottom_contact_distance.get_abs_value(support_material_interface_extruder_dmr);
+        // % of layer_height (the object's print settings layer height, already z-step aligned).
+        params.gap_object_support = object_config.support_material_bottom_contact_distance.get_abs_value(params.layer_height);
         params.gap_object_support = check_z_step(params.gap_object_support, params.z_step);
-        params.gap_support_object = object_config.support_material_contact_distance.get_abs_value(support_material_interface_extruder_dmr);
+        params.gap_support_object = object_config.support_material_contact_distance.get_abs_value(params.layer_height);
         params.gap_support_object = check_z_step(params.gap_support_object, params.z_step);
         if (params.gap_object_support <= 0)
             params.gap_object_support = params.gap_support_object;
