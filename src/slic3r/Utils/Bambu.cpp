@@ -16,13 +16,18 @@
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string/trim.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/nowide/fstream.hpp>
+// FIXME replace with <boost/md5.hpp> once mainstream (same primitive AppConfig.cpp uses on WIN32).
+#include <boost/uuid/detail/md5.hpp>
 
 #include <curl/curl.h>
 
 #include <wx/string.h>
 
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/miniz_extension.hpp"
 #include "slic3r/GUI/GUI.hpp"
 #include "slic3r/GUI/I18N.hpp"
 
@@ -570,6 +575,90 @@ std::string to_lower_ascii(std::string s)
     return s;
 }
 
+// Lowercase-hex MD5 of a byte buffer (the printer's project_file handler
+// compares this against the file it downloads).
+std::string md5_hex_lower(const void *data, size_t len)
+{
+    boost::uuids::detail::md5 hash;
+    boost::uuids::detail::md5::digest_type digest{};
+    hash.process_bytes(data, len);
+    hash.get_digest(digest);
+    std::ostringstream out;
+    for (unsigned int v : digest)
+        out << std::hex << std::setw(8) << std::setfill('0') << v;
+    return out.str();
+}
+
+std::string md5_hex_lower_file(const fs::path &path)
+{
+    try {
+        boost::nowide::ifstream in(path.string(), std::ios::binary);
+        if (! in)
+            return {};
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        const std::string data = ss.str();
+        return md5_hex_lower(data.data(), data.size());
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
+// The firmware's print.project_file parser locates the printable gcode via
+// "param" and verifies it against "md5". For a .3mf project the gcode lives
+// inside the archive: param = "Metadata/plate_<n>.gcode" (lowest plate index)
+// and md5 = md5 of that gcode (Bambu Studio ships it in the archive as
+// Metadata/plate_<n>.gcode.md5). A param pointing at the archive itself and/or
+// an empty md5 makes the printer ack the command and then fail with
+// HMS 0500-4003 "Print File Parsing Error" (verified live 2026-11-25).
+bool plate_gcode_from_3mf(const fs::path &path, std::string &param, std::string &md5)
+{
+    ZipReader zip(path.string());
+    if (! zip.success())
+        return false;
+    mz_zip_archive *archive = &zip.archive;
+    const mz_uint count = mz_zip_reader_get_num_files(archive);
+    int best = -1;
+    for (mz_uint i = 0; i < count; ++i) {
+        char name[512];
+        if (! mz_zip_reader_get_filename(archive, i, name, sizeof(name)))
+            continue;
+        int idx = -1;
+        if (std::sscanf(name, "Metadata/plate_%d.gcode", &idx) == 1 && idx > 0)
+            if (best == -1 || idx < best)
+                best = idx;
+    }
+    if (best < 0)
+        return false;
+    param = "Metadata/plate_" + std::to_string(best) + ".gcode";
+
+    // Prefer the md5 Bambu Studio embedded next to the plate gcode.
+    const std::string md5_entry = param + ".md5";
+    const int mi = mz_zip_reader_locate_file(archive, md5_entry.c_str(), nullptr, 0);
+    if (mi >= 0) {
+        size_t sz = 0;
+        if (void *buf = mz_zip_reader_extract_to_heap(archive, mi, &sz, 0)) {
+            md5.assign(static_cast<const char*>(buf), sz);
+            mz_free(buf);
+        }
+    }
+    boost::algorithm::trim(md5);
+    md5 = to_lower_ascii(md5);
+    if (md5.find_first_not_of("0123456789abcdef") != std::string::npos)
+        md5.clear(); // unexpected content: recompute instead
+    if (md5.empty()) {
+        const int gi = mz_zip_reader_locate_file(archive, param.c_str(), nullptr, 0);
+        if (gi < 0)
+            return false;
+        size_t sz = 0;
+        if (void *buf = mz_zip_reader_extract_to_heap(archive, gi, &sz, 0)) {
+            md5 = md5_hex_lower(buf, sz);
+            mz_free(buf);
+        }
+    }
+    return ! md5.empty();
+}
+
 // Serial numbers are uppercase alphanumeric; sanitize user input defensively.
 std::string sanitize_serial(const std::string &s)
 {
@@ -794,19 +883,36 @@ bool Bambu::upload(PrintHostUpload upload_data, ProgressFn progress_fn, ErrorFn 
 
         // OpenBambuAPI print.project_file: local prints always use 0 ids and
         // url "ftp:///..." pointing at the uploaded file (cache/ for uploads).
+        // "param" + "md5" tell the printer which gcode to print and let it
+        // verify the download: for a .3mf project, param is the plate gcode
+        // INSIDE the archive and md5 is that gcode's md5; for a raw .gcode,
+        // param is the cache path and md5 is the file's md5. param = the
+        // archive itself with an empty md5 fails with HMS 0500-4003.
         const std::string cache_name = "cache/" + filename.string();
+        std::string param = cache_name;
+        std::string md5;
+        if (boost::algorithm::iends_with(filename.string(), ".3mf")) {
+            if (! plate_gcode_from_3mf(upload_data.source_path, param, md5)) {
+                // No plate gcode in the archive: fall back to the archive
+                // path with the archive md5 (best effort).
+                param = cache_name;
+                md5 = md5_hex_lower_file(upload_data.source_path);
+            }
+        } else {
+            md5 = md5_hex_lower_file(upload_data.source_path);
+        }
         std::ostringstream req;
         req << "{\"print\": {"
             << "\"sequence_id\": \"1\", "
             << "\"command\": \"project_file\", "
-            << "\"param\": " << json_str(cache_name) << ", "
+            << "\"param\": " << json_str(param) << ", "
             << "\"project_id\": \"0\", "
             << "\"profile_id\": \"0\", "
             << "\"task_id\": \"0\", "
             << "\"subtask_id\": \"0\", "
             << "\"subtask_name\": " << json_str(filename.stem().string()) << ", "
             << "\"url\": " << json_str("ftp:///" + cache_name) << ", "
-            << "\"md5\": \"\", "
+            << "\"md5\": " << json_str(md5) << ", "
             << "\"timelapse\": false, "
             << "\"bed_type\": \"auto\", "
             << "\"use_ams\": false, "
