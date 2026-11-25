@@ -900,8 +900,21 @@ void GUI_App::post_init()
                 const std::string& filename = this->init_params->input_files.front();
                 if (boost::algorithm::iends_with(filename, ".amf") ||
                     boost::algorithm::iends_with(filename, ".amf.xml") ||
-                    boost::algorithm::iends_with(filename, ".3mf"))
+                    boost::algorithm::iends_with(filename, ".3mf")) {
                     this->plater()->set_project_filename(from_u8(filename));
+                    // A file passed on the command line can be loaded as plain
+                    // geometry (a geometry-only 3mf, or drop_project_action =
+                    // "import models only"), which never reaches the "Open as
+                    // project" action dialog - the only path that schedules a
+                    // session backup after a project load. The call above
+                    // claims the file as the current project, so flush a
+                    // session backup right away to match: a crash straight
+                    // after a CLI-arg load then still restores the project.
+                    // prompt_restore() is modal and runs before this (post_init
+                    // is invoked from a CallAfter), so the s_prompt_pending
+                    // guard cannot swallow this backup.
+                    SessionBackup::schedule_backup(0);
+                }
             }
             if (this->init_params->delete_after_load) {
                 for (const std::string& p : this->init_params->input_files) {

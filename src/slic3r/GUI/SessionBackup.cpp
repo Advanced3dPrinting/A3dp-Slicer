@@ -867,6 +867,13 @@ void SessionBackup::prompt_restore()
         dialog.ShowModal();
     }
     set_prompt_pending(false);
+    // Any backup scheduled while the prompt was up (the debounced startup
+    // backup, and a CLI-arg project load whose post_init runs inside this
+    // modal loop) was swallowed by the s_prompt_pending guard and its
+    // one-shot timer is gone. Flush one backup now that the guard is down
+    // so the live session is covered again; later restores re-schedule
+    // their own backups through load_project().
+    schedule_backup(0);
     for (const std::string &sid : to_discard)
         discard_session(sid);
     if (to_restore.empty())
