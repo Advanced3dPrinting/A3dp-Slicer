@@ -33,6 +33,9 @@ struct GUI_InitParams
     bool                        start_downloader;
     bool                        delete_after_load;
     std::string                 download_url;
+    // Non-empty when the GUI shall restore this crash-recovery session at
+    // startup instead of prompting (internal --restore-session <id>).
+    std::string                 restore_session_id;
 #if ENABLE_GL_CORE_PROFILE
 		std::pair<int, int>         opengl_version;
 		bool                        opengl_debug;

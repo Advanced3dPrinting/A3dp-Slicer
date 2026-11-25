@@ -181,6 +181,90 @@ void start_new_slicer(const std::vector<wxString>& files, bool single_instance/*
 	start_new_slicer_or_gcodeviewer(NewSlicerInstanceType::Slicer, files, single_instance, delete_after_load);
 }
 
+// Start a new instance of THIS executable with extra command line arguments
+// and the same data directory (see Process.hpp). Unlike start_new_slicer(),
+// the running executable itself is started, not a SLIC3R_APP_CMD sibling, so
+// this works for renamed/side-by-side installs as well.
+bool start_new_slicer_with_extra_args(const std::vector<std::string> &extra_args)
+{
+#ifdef _WIN32
+	wxString path = wxStandardPaths::Get().GetExecutablePath();
+	std::vector<std::wstring> wide_args;
+	wide_args.reserve(extra_args.size());
+	std::vector<const wchar_t*> args;
+	args.reserve(extra_args.size() + 4);
+	args.push_back(path.wc_str());
+	for (const std::string &a : extra_args) {
+		wide_args.emplace_back(boost::nowide::widen(a));
+		args.push_back(wide_args.back().c_str());
+	}
+	std::wstring wide_datadir = boost::nowide::widen(Slic3r::data_dir());
+	args.push_back(L"--datadir");
+	args.push_back(wide_datadir.c_str());
+	args.push_back(nullptr);
+	BOOST_LOG_TRIVIAL(info) << "Trying to spawn a new slicer '" << into_u8(path) << "'";
+	const long pid = wxExecute(const_cast<wchar_t**>(args.data()), wxEXEC_ASYNC);
+	if (pid <= 0)
+		BOOST_LOG_TRIVIAL(error) << "Failed to spawn a new slicer '" << into_u8(path);
+	return pid > 0;
+#else  // Win32 (else not)
+	boost::filesystem::path bin_path = into_path(wxStandardPaths::Get().GetExecutablePath());
+#if defined(__APPLE__)
+	// On Apple the wxExecute fails, thus we use boost::process instead.
+	BOOST_LOG_TRIVIAL(info) << "Trying to spawn a new slicer '" << bin_path.string() << "'";
+	try {
+		std::vector<std::string> args;
+		args.reserve(extra_args.size() + 2);
+		for (const std::string &a : extra_args)
+			args.emplace_back(a);
+		args.push_back("--datadir");
+		args.push_back(Slic3r::data_dir());
+		boost::process::spawn(bin_path, args);
+	    // boost::process::spawn() sets SIGCHLD to SIGIGN for the child process, thus if a child PrusaSlicer spawns another
+	    // subprocess and the subrocess dies, the child PrusaSlicer will not receive information on end of subprocess
+	    // (posix waitpid() call will always fail).
+	    // https://jmmv.dev/2008/10/boostprocess-and-sigchld.html
+	    // The child instance of PrusaSlicer has to reset SIGCHLD to its default, so that posix waitpid() and similar continue to work.
+	    // See GH issue #5507 (GUI_Init.cpp resets it at GUI startup.)
+	}
+	catch (const std::exception& ex) {
+		BOOST_LOG_TRIVIAL(error) << "Failed to spawn a new slicer '" << bin_path.string() << "': " << ex.what();
+		return false;
+	}
+	return true;
+#else // Linux or Unix
+	std::vector<const char*> args;
+	args.reserve(extra_args.size() + 4);
+	std::string my_path;
+#ifdef __linux__
+	{
+		// If executed by an AppImage, start the AppImage, not the main process.
+		// see https://docs.appimage.org/packaging-guide/environment-variables.html#id2
+		const char* appimage_binary = std::getenv("APPIMAGE");
+		if (appimage_binary)
+			args.emplace_back(appimage_binary);
+	}
+#endif // __linux__
+	if (args.empty()) {
+		my_path = bin_path.string();
+		args.emplace_back(my_path.c_str());
+	}
+	std::vector<std::string> owned_args(extra_args); // keeps the c_str()s alive
+	for (const std::string &a : owned_args)
+		args.emplace_back(a.c_str());
+	args.push_back("--datadir");
+	std::string datadir_path = Slic3r::data_dir();
+	args.push_back(datadir_path.c_str());
+	args.emplace_back(nullptr);
+	BOOST_LOG_TRIVIAL(info) << "Trying to spawn a new slicer '" << args[0] << "'";
+	const long pid = wxExecute(const_cast<char**>(args.data()), wxEXEC_ASYNC | wxEXEC_MAKE_GROUP_LEADER);
+	if (pid <= 0)
+		BOOST_LOG_TRIVIAL(error) << "Failed to spawn a new slicer '" << args[0];
+	return pid > 0;
+#endif // __APPLE__ / Linux
+#endif // Win32
+}
+
 void start_new_gcodeviewer(const wxString *path_to_open)
 {
 	start_new_slicer_or_gcodeviewer(NewSlicerInstanceType::GCodeViewer, path_to_open, false, false);

@@ -728,6 +728,12 @@ int CLI::run(int argc, char **argv)
         params.start_downloader = start_downloader;
         params.download_url = download_url;
         params.delete_after_load = delete_after_load;
+        {
+            // Internal --restore-session <id>: restore the given crash-recovery
+            // session at GUI startup (see SessionBackup).
+            const ConfigOptionString *restore_session_opt = m_config.opt<ConfigOptionString>("restore-session");
+            params.restore_session_id = (restore_session_opt != nullptr) ? restore_session_opt->value : std::string();
+        }
 #if ENABLE_GL_CORE_PROFILE
         params.opengl_version = opengl_version;
         params.opengl_debug = opengl_debug;

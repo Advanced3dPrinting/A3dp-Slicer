@@ -12499,6 +12499,14 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->label = L("Data directory");
     def->tooltip = L("Load and store settings at the given directory. This is useful for maintaining different profiles or including configurations from a network storage.");
 
+    def = this->add("restore-session", coString);
+    def->label = L("Restore crash-recovery session");
+    def->tooltip = L("Internal: start the GUI and restore the given crash-recovery session backup "
+                     "(a session directory under the data directory). Used by the session restore "
+                     "dialog to open each restored session in its own instance.");
+    def->cli = "restore-session";
+    def->set_default_value(new ConfigOptionString());
+
     def = this->add("threads", coInt);
     def->label = L("Maximum number of threads");
     def->tooltip = L("Sets the maximum number of threads the slicing process will use. If not defined, it will be decided automatically.");

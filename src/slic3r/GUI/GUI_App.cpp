@@ -1879,9 +1879,16 @@ bool GUI_App::on_init_inner()
     // Crash session backup: offer to restore sessions left behind by
     // instances that did not shut down cleanly (per-instance backups, see
     // SessionBackup). One crashed session -> simple yes/no prompt; several ->
-    // a list with checkboxes. No-op when every instance exited cleanly.
-    if (is_editor())
-        SessionBackup::prompt_restore();
+    // a list with checkboxes, each picked session restored into its own new
+    // instance. Instances launched with the internal --restore-session <id>
+    // restore exactly that session instead of prompting. No-op when every
+    // instance exited cleanly.
+    if (is_editor()) {
+        if (! init_params->restore_session_id.empty())
+            SessionBackup::restore_requested(init_params->restore_session_id);
+        else
+            SessionBackup::prompt_restore();
+    }
 
     if (const std::string& crash_reason = app_config->get("restore_win_position");
         boost::starts_with(crash_reason,"crashed"))

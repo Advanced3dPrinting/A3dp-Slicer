@@ -33,9 +33,14 @@ namespace GUI {
 // or whose owner process is dead (pid existence + start-token verified, so a
 // recycled pid cannot masquerade as a live instance) is a crashed candidate.
 //
-// Restore prompt: exactly one crashed session gets the plain yes/no prompt;
-// several crashed sessions are listed with per-session checkboxes (timestamp
-// + project name) offering restore/discard of the selected ones.
+// Restore prompt: exactly one crashed session gets the plain yes/no prompt
+// (restored into this instance); several crashed sessions are listed with
+// per-session checkboxes (start time, pid and project path) offering
+// restore/discard of the selected ones. Every session picked in the list is
+// restored into its OWN new instance (launched with --restore-session, see
+// restore_requested()), so restoring several sessions never collapses them
+// into one plater; sessions that fail to spawn fall back to the sequential
+// in-place restore.
 //
 // Lifecycle: restore deletes the session dir after a successful load; discard
 // deletes it; a clean exit deletes the instance's own dir + marker. On
@@ -54,9 +59,11 @@ class SessionBackup
 public:
     struct CrashedSession
     {
-        std::string session_id;    // directory name under <data_dir>/session/
+        std::string session_id;    // directory name under <data_dir>/session/, "<pid>-<start epoch>"
         std::string project_file;  // original project path, may be empty
         std::string timestamp;     // iso utc of the last backup
+        std::string session_start; // iso utc of the instance start (fallback: the backup timestamp)
+        long        pid = 0;       // owner pid (parsed from session_id)
         std::string app_version;
     };
 
@@ -96,9 +103,17 @@ public:
     static bool restore_session(const std::string &session_id);
 
     // Show the restore prompt(s): a single crashed session gets the plain
-    // yes/no dialog, several get a checkbox list. Chosen restores/discards
-    // are scheduled via CallAfter. No-op when there is nothing to restore.
+    // yes/no dialog (restored into this instance), several get a checkbox
+    // list where every picked session is restored into its own new instance.
+    // Chosen restores/discards are scheduled via CallAfter. No-op when there
+    // is nothing to restore.
     static void prompt_restore();
+
+    // Entry point of an instance launched with "--restore-session <id>"
+    // (spawned by prompt_restore() to give each picked session its own
+    // instance): restore exactly this session, without prompting. A missing
+    // backup (already restored by another path) is reported and ignored.
+    static void restore_requested(const std::string &session_id);
 
 private:
     // Restore the given sessions one after another (chained via CallAfter).

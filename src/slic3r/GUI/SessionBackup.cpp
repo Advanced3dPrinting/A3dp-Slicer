@@ -8,6 +8,8 @@
 #include "Plater.hpp"
 #include "format.hpp"
 
+#include "../Utils/Process.hpp"
+
 #include "libslic3r/AppConfig.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Format/3mf.hpp"
@@ -23,6 +25,7 @@
 #include <ctime>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -671,6 +674,19 @@ std::vector<SessionBackup::CrashedSession> SessionBackup::crashed_sessions()
         cs.app_version = read_state_field(p / FILE_STATE_JSON, "app_version");
         cs.timestamp   = read_state_field(p / FILE_STATE_JSON, "timestamp");
         cs.project_file = read_state_field(p / FILE_STATE_JSON, "project_file");
+        cs.session_start = read_state_field(p / FILE_STATE_JSON, "session_start");
+        // The session id is "<pid>-<start epoch>"; it also provides the owner
+        // pid and a start-time fallback for sessions whose state json is
+        // missing or predates the session_start field.
+        const size_t dash = name.find('-');
+        if (dash != std::string::npos) {
+            cs.pid = atol(name.substr(0, dash).c_str());
+            if (cs.session_start.empty()) {
+                const std::time_t started = atol(name.c_str() + dash + 1);
+                if (started > 0)
+                    cs.session_start = iso_from_time_t(started);
+            }
+        }
         if (cs.timestamp.empty())
             cs.timestamp = iso_from_time_t(fs::last_write_time(p, ec));
         out.push_back(cs);
@@ -753,6 +769,18 @@ void SessionBackup::schedule_restores(std::vector<std::string> session_ids)
     });
 }
 
+void SessionBackup::restore_requested(const std::string &session_id)
+{
+    boost::system::error_code ec;
+    if (! fs::is_directory(session_dir_of(session_id), ec)) {
+        // Already restored or discarded by another path - nothing to do.
+        BOOST_LOG_TRIVIAL(info) << "Session restore: session " << session_id
+                                << " no longer exists, nothing to restore";
+        return;
+    }
+    restore_session(session_id);
+}
+
 void SessionBackup::prompt_restore()
 {
     const std::vector<CrashedSession> crashed = crashed_sessions();
@@ -781,23 +809,26 @@ void SessionBackup::prompt_restore()
                 SLIC3R_APP_NAME)), 0, wxALL, 10);
         std::vector<wxCheckBox *> boxes;
         for (const CrashedSession &cs : crashed) {
-            const std::time_t t = parse_iso_utc(cs.timestamp);
-            wxString when = (t > 0) ? wxDateTime(t).Format(_L("%Y-%m-%d %H:%M")) : from_u8(cs.timestamp);
-            std::string project = cs.project_file;
-            if (! project.empty())
-                project = fs::path(project).filename().string();
+            // Row: "<start time> (pid <pid>) — <project path>". The start
+            // time + pid identify the instance; the project path tells the
+            // user which session holds which work.
+            const std::time_t t = parse_iso_utc(cs.session_start);
+            wxString when = (t > 0) ? wxDateTime(t).Format(_L("%Y-%m-%d %H:%M")) : from_u8(cs.session_start);
             wxCheckBox *cb = new wxCheckBox(&dialog, wxID_ANY,
-                format_wxstr(_L("%1% \u2014 %2%"), when,
-                    project.empty() ? _L("(no project)") : from_u8(project)));
+                format_wxstr(_L("%1% (pid %2%) \u2014 %3%"), when,
+                    (cs.pid > 0) ? std::to_string(cs.pid) : std::string("?"),
+                    cs.project_file.empty() ? _L("(no project)") : from_u8(cs.project_file)));
             top->Add(cb, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
             boxes.push_back(cb);
         }
         top->Add(new wxStaticText(&dialog, wxID_ANY,
-            _L("Sessions are restored one after another; the plater keeps the last restored project.\n"
+            _L("Each selected session is restored into its own new application window.\n"
                "Unchecked sessions are kept until they are restored, discarded, or expire.")), 0, wxALL, 10);
         wxBoxSizer *btns = new wxBoxSizer(wxHORIZONTAL);
         wxButton *select_all = new wxButton(&dialog, wxID_ANY, _L("Select all"));
+        wxButton *restore_all = new wxButton(&dialog, wxID_ANY, _L("Restore all"));
         btns->Add(select_all, 0, wxRIGHT, 10);
+        btns->Add(restore_all, 0, wxRIGHT, 10);
         btns->AddStretchSpacer();
         wxButton *discard_btn = new wxButton(&dialog, wxID_ANY, _L("Discard selected"));
         wxButton *restore_btn = new wxButton(&dialog, wxID_OK, _L("Restore selected"));
@@ -811,10 +842,19 @@ void SessionBackup::prompt_restore()
             for (wxCheckBox *cb : boxes)
                 cb->SetValue(true);
         });
-        restore_btn->Bind(wxEVT_BUTTON, [&](wxCommandEvent &) {
+        auto collect_selected = [&boxes, &crashed, &to_restore](wxCommandEvent &) {
             for (size_t i = 0; i < boxes.size(); ++ i)
                 if (boxes[i]->GetValue())
                     to_restore.push_back(crashed[i].session_id);
+        };
+        restore_btn->Bind(wxEVT_BUTTON, [&dialog, collect_selected](wxCommandEvent &e) {
+            collect_selected(e);
+            dialog.EndModal(wxID_OK);
+        });
+        restore_all->Bind(wxEVT_BUTTON, [&boxes, &dialog, collect_selected](wxCommandEvent &e) {
+            for (wxCheckBox *cb : boxes)
+                cb->SetValue(true);
+            collect_selected(e);
             dialog.EndModal(wxID_OK);
         });
         discard_btn->Bind(wxEVT_BUTTON, [&](wxCommandEvent &) {
@@ -829,7 +869,25 @@ void SessionBackup::prompt_restore()
     set_prompt_pending(false);
     for (const std::string &sid : to_discard)
         discard_session(sid);
-    schedule_restores(std::move(to_restore));
+    if (to_restore.empty())
+        return;
+    if (crashed.size() == 1) {
+        // Single-session fast path: restore into this instance (unchanged).
+        schedule_restores(std::move(to_restore));
+        return;
+    }
+    // Multi-session list: every picked session is restored into its OWN new
+    // instance (the fresh instance showing this dialog stays empty), so
+    // restoring several sessions never collapses them into one plater.
+    // Sessions we failed to spawn fall back to the sequential in-place
+    // restore so that nothing is lost.
+    std::vector<std::string> spawn_failed;
+    for (const std::string &sid : to_restore)
+        if (! Slic3r::GUI::start_new_slicer_with_extra_args(
+                {"--no-single-instance", "--restore-session", sid}))
+            spawn_failed.push_back(sid);
+    if (! spawn_failed.empty())
+        schedule_restores(std::move(spawn_failed));
 }
 
 } // namespace GUI
