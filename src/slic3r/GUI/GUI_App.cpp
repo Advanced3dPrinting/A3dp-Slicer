@@ -910,9 +910,13 @@ void GUI_App::post_init()
                     // claims the file as the current project, so flush a
                     // session backup right away to match: a crash straight
                     // after a CLI-arg load then still restores the project.
-                    // prompt_restore() is modal and runs before this (post_init
-                    // is invoked from a CallAfter), so the s_prompt_pending
-                    // guard cannot swallow this backup.
+                    // If a crash-recovery prompt is up, post_init() runs
+                    // inside prompt_restore()'s modal loop: no main event
+                    // loop is running during init, so the first idle
+                    // dispatch happens in that nested loop, and this backup
+                    // lands under the s_prompt_pending guard. It is
+                    // recovered by the guard-drop flush at the end of
+                    // prompt_restore(). Without a prompt it fires directly.
                     SessionBackup::schedule_backup(0);
                 }
             }
